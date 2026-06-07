@@ -1,0 +1,52 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  EMPLOYEE
+  ADMIN
+}
+
+enum NominationStatus {
+  PENDING
+  APPROVED
+  DECLINED
+}
+
+enum NominationCategory {
+  ABOVE_AND_BEYOND
+  TEAM_PLAYER
+  INNOVATION
+  CLIENT_IMPACT
+  MENTORSHIP
+}
+
+model User {
+  id           Int          @id @default(autoincrement())
+  name         String
+  email        String       @unique
+  password     String
+  role         Role         @default(EMPLOYEE)
+  points       Int          @default(0)
+  createdAt    DateTime     @default(now())
+  nominations  Nomination[] @relation("SubmittedBy")
+}
+
+model Nomination {
+  id           Int                @id @default(autoincrement())
+  projectName  String
+  nomineeName  String
+  nominatedBy  String
+  category     NominationCategory
+  context      String
+  status       NominationStatus   @default(PENDING)
+  points       Int?
+  submittedById Int
+  submittedBy  User               @relation("SubmittedBy", fields: [submittedById], references: [id])
+  createdAt    DateTime           @default(now())
+}
