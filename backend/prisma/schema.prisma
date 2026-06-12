@@ -9,11 +9,13 @@ datasource db {
 
 enum Role {
   EMPLOYEE
+  HR
   ADMIN
 }
 
 enum NominationStatus {
   PENDING
+  ESCALATED
   APPROVED
   DECLINED
 }
