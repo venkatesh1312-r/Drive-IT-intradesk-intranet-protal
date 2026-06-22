@@ -10,7 +10,9 @@ import { Roles } from '../auth/roles.decorator';
 export class NominationsController {
   constructor(private nominationsService: NominationsService) {}
 
+  // Only HR and Admin may create nominations — employees can only view rewards they received
   @Post()
+  @Roles('HR', 'ADMIN')
   create(@Body() dto: CreateNominationDto, @Request() req) {
     return this.nominationsService.create(dto, req.user.id);
   }

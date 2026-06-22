@@ -2,7 +2,7 @@ import { Injectable, NotFoundException, BadRequestException } from '@nestjs/comm
 import { PrismaService } from '../prisma.service';
 import { CreateNominationDto, ApproveNominationDto } from './nominations.dto';
 
-const HR_CATEGORIES = ['TEAM_PLAYER', 'ABOVE_AND_BEYOND'];
+const HR_CATEGORIES = ['COLLABORATION', 'EXCELLENCE'];
 
 @Injectable()
 export class NominationsService {

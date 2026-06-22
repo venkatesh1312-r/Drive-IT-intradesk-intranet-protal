@@ -22,3 +22,11 @@ export class LoginDto {
   @IsNotEmpty()
   password: string;
 }
+
+export class ChangePasswordDto {
+  @IsNotEmpty()
+  currentPassword: string;
+
+  @MinLength(6, { message: 'New password must be at least 6 characters' })
+  newPassword: string;
+}

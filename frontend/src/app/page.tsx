@@ -7,10 +7,14 @@ import { api } from '@/lib/api';
 
 /* Dev credentials — only used when backend is unreachable */
 const DEV_USERS = [
-  { email: 'admin@driveit.in',    password: 'admin123',    role: 'ADMIN',    name: 'HR Admin',   points: 0   },
-  { email: 'hr@driveit.in',       password: 'hr123',       role: 'HR',       name: 'HR Officer', points: 0   },
-  { email: 'employee@driveit.in', password: 'employee123', role: 'EMPLOYEE', name: 'Riya Sharma',points: 120 },
+  { email: 'admin@driveit.in',    password: 'admin123',    role: 'ADMIN',    name: 'Admin',       points: 0   },
+  { email: 'hr@driveit.in',       password: 'hr123',       role: 'HR',       name: 'HR Officer',  points: 0   },
+  { email: 'it@driveit.in',       password: 'it@123',      role: 'IT',       name: 'IT Support',  points: 0   },
+  { email: 'employee@driveit.in', password: 'employee123', role: 'EMPLOYEE', name: 'Riya Sharma', points: 120 },
 ];
+
+const homeFor = (role: string) =>
+  role === 'HR' ? '/hr' : role === 'ADMIN' ? '/admin' : role === 'IT' ? '/it' : '/dashboard';
 
 const Diamond = ({ style }: { style: React.CSSProperties }) => (
   <div style={{ position: 'absolute', width: 10, height: 10, background: '#22d3ee', transform: 'rotate(45deg)', borderRadius: 2, ...style }} />
@@ -62,7 +66,7 @@ export default function LoginPage() {
         role: res.user.role,
         points: res.user.points ?? 0,
       }));
-      router.push(res.user.role === 'EMPLOYEE' ? '/dashboard' : '/admin');
+      router.push(homeFor(res.user.role));
     } catch (e: any) {
       const isNetworkError = e.name === 'AbortError' || e.message?.includes('fetch') || e.message?.includes('network') || e.message?.includes('aborted');
       if (isNetworkError) {
@@ -70,7 +74,7 @@ export default function LoginPage() {
         if (match) {
           localStorage.setItem('token', 'dev-token');
           localStorage.setItem('user', JSON.stringify({ email: match.email, name: match.name, role: match.role, points: match.points }));
-          router.push(match.role === 'EMPLOYEE' ? '/dashboard' : '/admin');
+          router.push(homeFor(match.role));
           return;
         }
         setError('Invalid email or password.');
