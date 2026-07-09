@@ -1,32 +1,24 @@
-import { IsEmail, IsNotEmpty, MinLength, Matches } from 'class-validator';
+import { IsNotEmpty, Matches, Length } from 'class-validator';
+import { Transform } from 'class-transformer';
 
-const DOMAIN_MSG = 'Only @driveit.in email addresses are permitted';
+// OTP login rule: firstname.initial@driveittech.in (e.g. priya.s@driveittech.in)
+export const OTP_EMAIL_RULE = /^[a-z]+\.[a-z]@driveittech\.in$/;
+const OTP_EMAIL_MSG =
+  'Email must be in the format firstname.initial@driveittech.in';
 
-export class RegisterDto {
-  @IsNotEmpty()
-  name: string;
-
-  @IsEmail()
-  @Matches(/@driveit\.in$/i, { message: DOMAIN_MSG })
+export class RequestOtpDto {
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim().toLowerCase() : value))
+  @Matches(OTP_EMAIL_RULE, { message: OTP_EMAIL_MSG })
   email: string;
-
-  @MinLength(6)
-  password: string;
 }
 
-export class LoginDto {
-  @IsEmail()
-  @Matches(/@driveit\.in$/i, { message: DOMAIN_MSG })
+export class VerifyOtpDto {
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim().toLowerCase() : value))
+  @Matches(OTP_EMAIL_RULE, { message: OTP_EMAIL_MSG })
   email: string;
 
   @IsNotEmpty()
-  password: string;
-}
-
-export class ChangePasswordDto {
-  @IsNotEmpty()
-  currentPassword: string;
-
-  @MinLength(6, { message: 'New password must be at least 6 characters' })
-  newPassword: string;
+  @Length(6, 6, { message: 'The code is 6 digits' })
+  @Matches(/^\d{6}$/, { message: 'The code is 6 digits' })
+  otp: string;
 }

@@ -8,15 +8,17 @@ import { Pagination } from '@/components/Pagination';
 import { SettingsModule } from '@/components/SettingsModule';
 import { AskAiFab } from '@/components/AskAiFab';
 import { ScheduleForm } from '@/components/VisitorsModule';
+import { WorkLogModule } from '@/components/WorkLogModule';
 
 const PER_PAGE = 10;
 
 /* ── Nav items ───────────────────────────────────────────────────── */
-type Module = 'overview' | 'reward' | 'helpdesk' | 'settings';
+type Module = 'overview' | 'reward' | 'helpdesk' | 'worklog' | 'settings';
 
 const NAV: { key: Module; label: string; icon: () => JSX.Element }[] = [
   { key: 'overview', label: 'Overview', icon: () => <svg width={18} height={18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg> },
   { key: 'helpdesk', label: 'Help Desk', icon: () => <svg width={18} height={18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg> },
+  { key: 'worklog', label: 'Work Log', icon: () => <svg width={18} height={18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="15" y2="17"/></svg> },
   { key: 'reward',   label: 'Reward System', icon: () => <svg width={18} height={18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg> },
   { key: 'settings', label: 'Settings', icon: () => <svg width={18} height={18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg> },
 ];
@@ -724,6 +726,7 @@ function OverviewModule({ user, onNavigate }: { user: any; onNavigate: (m: Modul
   const [activity, setActivity] = useState<any[]>([]);
   const [visits, setVisits] = useState<any[]>([]);
   const [addGuestOpen, setAddGuestOpen] = useState(false);
+  const [workLogEntries, setWorkLogEntries] = useState<any[]>([]);
 
   function loadVisits() { api.getMyVisits().then(setVisits).catch(() => {}); }
   useEffect(() => {
@@ -731,8 +734,10 @@ function OverviewModule({ user, onNavigate }: { user: any; onNavigate: (m: Modul
     api.getReceivedNominations().then(setReceived).catch(() => {});
     api.getMyTickets().then(setTickets).catch(() => {});
     api.getNotifications().then(setActivity).catch(() => {});
+    api.getMyWorkLog().then(setWorkLogEntries).catch(() => {});
     if (user?.role === 'HR' || user?.role === 'ADMIN') loadVisits();
   }, []);
+  const loggedWorkToday = workLogEntries.some((e: any) => (e.entryDate || '').slice(0, 10) === new Date().toISOString().slice(0, 10));
 
   const firstName = user?.name?.split(' ')[0] || 'there';
   const openTickets = tickets.filter(t => !['CLOSED', 'RESOLVED'].includes(t.status));
@@ -755,6 +760,7 @@ function OverviewModule({ user, onNavigate }: { user: any; onNavigate: (m: Modul
     { label: 'My Redeemed Rewards', value: received.length, color: '#16a34a', bg: 'var(--tile-green-bg)', border: 'var(--tile-green-bd)', go: 'reward' as Module },
     { label: 'Open Tickets', value: openTickets.length, color: '#d97706', bg: 'var(--tile-amber-bg)', border: 'var(--tile-amber-bd)', go: 'helpdesk' as Module },
     { label: 'Resolved Tickets', value: resolvedTickets.length, color: '#8b5cf6', bg: 'var(--tile-violet-bg)', border: 'var(--tile-violet-bd)', go: 'helpdesk' as Module },
+    { label: 'Work Log Entries', value: workLogEntries.length, color: 'var(--accent)', bg: 'var(--accent-soft)', border: 'var(--border)', go: 'worklog' as Module },
   ];
 
   const card: React.CSSProperties = { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12 };
@@ -824,8 +830,16 @@ function OverviewModule({ user, onNavigate }: { user: any; onNavigate: (m: Modul
         </div>
       </div>
 
+      {/* Work Log nudge — gentle, never punitive */}
+      {!loggedWorkToday && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 16px', borderRadius: 10, background: 'var(--b-amber-bg)', border: '1px solid var(--b-amber-bd)', marginBottom: 16 }}>
+          <span style={{ fontSize: 13, color: 'var(--b-amber-fg)', flex: 1 }}>You haven't logged today's work yet.</span>
+          <button onClick={() => onNavigate('worklog')} style={{ background: 'none', border: 'none', color: 'var(--b-amber-fg)', fontWeight: 700, fontSize: 12.5, cursor: 'pointer', textDecoration: 'underline' }}>Log it now</button>
+        </div>
+      )}
+
       {/* KPI tiles */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14, marginBottom: 16 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14, marginBottom: 16 }}>
         {kpis.map(c => (
           <div key={c.label} onClick={() => onNavigate(c.go)} style={{ background: c.bg, border: `1px solid ${c.border}`, borderRadius: 12, padding: '18px 18px', minHeight: 88, display: 'flex', flexDirection: 'column', justifyContent: 'center', cursor: 'pointer', transition: 'transform 0.12s' }}
             onMouseEnter={e => (e.currentTarget.style.transform = 'translateY(-2px)')}
@@ -977,8 +991,9 @@ export default function DashboardPage() {
     api.getMe().then(me => {
       setUser({ ...u, id: me.id, name: me.name, points: me.points });
     }).catch(() => {
-      localStorage.clear();
-      router.push('/');
+      // 401 is already handled in api.ts (clears storage + redirects).
+      // For network errors (backend down), keep the stored session.
+      setUser(u);
     });
   }, []);
 
@@ -1124,6 +1139,7 @@ export default function DashboardPage() {
           {activeModule === 'overview' && <OverviewModule user={user} onNavigate={setActiveModule} />}
           {activeModule === 'reward' && <RewardModule />}
           {activeModule === 'helpdesk' && <HelpdeskModule user={user} />}
+          {activeModule === 'worklog' && <WorkLogModule user={user} />}
           {activeModule === 'settings' && <SettingsModule user={user} onUpdated={u => setUser((prev: any) => ({ ...prev, name: u.name, designation: u.designation }))} />}
         </div>
       </div>

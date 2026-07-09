@@ -1,8 +1,17 @@
-import { Controller, Get, Patch, Body, Query, UseGuards, Request } from '@nestjs/common';
+import {
+  Controller, Get, Patch, Body, Param, Query, UseGuards, Request,
+  BadRequestException, ForbiddenException, NotFoundException, ParseIntPipe,
+} from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
 import { PrismaService } from '../prisma.service';
+
+const ASSIGNABLE_ROLES = ['EMPLOYEE', 'HR', 'IT', 'ADMIN'] as const;
+// HR/IT agents need a department for ticket routing; others have none.
+const DEPT_FOR_ROLE: Record<string, 'HR' | 'IT' | null> = {
+  HR: 'HR', IT: 'IT', EMPLOYEE: null, ADMIN: null,
+};
 
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('api/users')
@@ -19,8 +28,8 @@ export class UsersController {
 
   @Get('me')
   getMe(@Request() req) {
-    const { password, ...user } = req.user;
-    return user;
+    // req.user is already stripped of credential fields by JwtStrategy.
+    return req.user;
   }
 
   // Self-service profile update — only name and job title are editable
@@ -103,8 +112,81 @@ export class UsersController {
   @Roles('ADMIN')
   async findAll() {
     return this.prisma.user.findMany({
-      select: { id: true, name: true, email: true, role: true, department: true, designation: true, points: true, createdAt: true },
+      select: { id: true, name: true, email: true, role: true, department: true, designation: true, points: true, status: true, createdAt: true },
       orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  // ─── Admin: approval & role management ────────────────────────────
+
+  @Get('pending')
+  @Roles('ADMIN')
+  async pendingApprovals() {
+    return this.prisma.user.findMany({
+      where: { status: 'AWAITING_APPROVAL' },
+      select: { id: true, name: true, email: true, createdAt: true },
+      orderBy: { createdAt: 'asc' },
+    });
+  }
+
+  @Patch(':id/approve')
+  @Roles('ADMIN')
+  async approve(
+    @Request() req,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: { role?: string },
+  ) {
+    const role = (body.role || '').toUpperCase();
+    if (!ASSIGNABLE_ROLES.includes(role as any)) {
+      throw new BadRequestException(`role must be one of: ${ASSIGNABLE_ROLES.join(', ')}`);
+    }
+    const user = await this.prisma.user.findUnique({ where: { id } });
+    if (!user) throw new NotFoundException('User not found');
+    if (user.status !== 'AWAITING_APPROVAL') {
+      throw new BadRequestException('User is not awaiting approval');
+    }
+    return this.prisma.user.update({
+      where: { id },
+      data: { role: role as any, department: DEPT_FOR_ROLE[role], status: 'ACTIVE' },
+      select: { id: true, name: true, email: true, role: true, department: true, status: true },
+    });
+  }
+
+  @Patch(':id/reject')
+  @Roles('ADMIN')
+  async reject(@Request() req, @Param('id', ParseIntPipe) id: number) {
+    if (id === req.user.id) throw new ForbiddenException('You cannot reject your own account');
+    const user = await this.prisma.user.findUnique({ where: { id } });
+    if (!user) throw new NotFoundException('User not found');
+    if (user.status !== 'AWAITING_APPROVAL') {
+      throw new BadRequestException('User is not awaiting approval');
+    }
+    return this.prisma.user.update({
+      where: { id },
+      data: { status: 'REJECTED' },
+      select: { id: true, name: true, email: true, status: true },
+    });
+  }
+
+  // Change role of an existing active user (Manage users screen).
+  @Patch(':id/role')
+  @Roles('ADMIN')
+  async changeRole(
+    @Request() req,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: { role?: string },
+  ) {
+    if (id === req.user.id) throw new ForbiddenException('You cannot change your own role');
+    const role = (body.role || '').toUpperCase();
+    if (!ASSIGNABLE_ROLES.includes(role as any)) {
+      throw new BadRequestException(`role must be one of: ${ASSIGNABLE_ROLES.join(', ')}`);
+    }
+    const user = await this.prisma.user.findUnique({ where: { id } });
+    if (!user) throw new NotFoundException('User not found');
+    return this.prisma.user.update({
+      where: { id },
+      data: { role: role as any, department: DEPT_FOR_ROLE[role] },
+      select: { id: true, name: true, email: true, role: true, department: true, status: true },
     });
   }
 }

@@ -5,6 +5,8 @@ import { api } from '@/lib/api';
 import { DriveITLogo, DriveITMark } from '@/components/DriveITLogo';
 import { NotificationBell } from '@/components/NotificationBell';
 import { Pagination } from '@/components/Pagination';
+import { WorkLogModule } from '@/components/WorkLogModule';
+import { AskAiFab } from '@/components/AskAiFab';
 
 const PER_PAGE = 10;
 
@@ -31,7 +33,7 @@ function statusLabel(s: string) {
 const STATUS_ORDER = ['OPEN', 'ASSIGNED', 'IN_PROGRESS', 'REOPENED', 'RESOLVED', 'CLOSED', 'REASSIGNED'];
 
 /* ── Nav items ───────────────────────────────────────────────────── */
-type View = 'queue' | 'mine';
+type View = 'queue' | 'mine' | 'worklog';
 
 const inputStyle: React.CSSProperties = {
   width: '100%', padding: '9px 12px', borderRadius: 8,
@@ -68,7 +70,7 @@ export default function ITDashboard() {
     if (u.role !== 'IT') { router.push(u.role === 'ADMIN' ? '/admin' : u.role === 'HR' ? '/hr' : '/dashboard'); return; }
     const saved = localStorage.getItem('theme_' + u.email);
     if (saved) setTheme(saved);
-    api.getMe().then(me => setUser({ ...u, id: me.id, name: me.name })).catch(() => { localStorage.clear(); router.push('/'); });
+    api.getMe().then(me => setUser({ ...u, id: me.id, name: me.name })).catch(() => { setUser(u); });
   }, []);
 
   useEffect(() => {
@@ -420,7 +422,7 @@ export default function ITDashboard() {
       <aside style={{ width: SIDEBAR_W, minWidth: SIDEBAR_W, background: '#071428', display: 'flex', flexDirection: 'column', transition: 'width 0.2s', overflow: 'hidden', position: 'relative', zIndex: 10 }}>
         {/* Logo */}
         <div style={{ padding: sidebarOpen ? '22px 20px 16px' : '22px 16px 16px', borderBottom: '1px solid #0e2744', display: 'flex', alignItems: 'center', justifyContent: sidebarOpen ? 'space-between' : 'center' }}>
-          {sidebarOpen ? <DriveITLogo style={{ height: 28 }} /> : <DriveITMark style={{ height: 28 }} />}
+          {sidebarOpen ? <DriveITLogo size={0.75} /> : <DriveITMark size={0.85} />}
           <button onClick={() => setSidebarOpen(v => !v)} style={{ background: 'none', border: 'none', color: '#4a7fa5', cursor: 'pointer', padding: 4, display: 'flex', flexShrink: 0 }}>
             <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               {sidebarOpen ? <><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></> : <><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></>}
@@ -441,6 +443,7 @@ export default function ITDashboard() {
           {([
             ['queue', 'Queue', <svg key="q" width={18} height={18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>],
             ['mine', 'My Tickets', <svg key="m" width={18} height={18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>],
+            ['worklog', 'Work Log', <svg key="w" width={18} height={18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="15" y2="17"/></svg>],
           ] as [View, string, React.ReactNode][]).map(([key, label, icon]) => {
             const isActive = view === key && !selected;
             return (
@@ -522,9 +525,11 @@ export default function ITDashboard() {
         </div>
 
         <div style={{ padding: '8px 28px 28px' }}>
-          {selected ? <TicketDetail /> : <TicketList />}
+          {view === 'worklog' ? <WorkLogModule user={user} /> : selected ? <TicketDetail /> : <TicketList />}
         </div>
       </div>
+
+      <AskAiFab />
     </div>
   );
 }

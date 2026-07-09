@@ -7,18 +7,23 @@ import { NotificationBell } from '@/components/NotificationBell';
 import { Pagination } from '@/components/Pagination';
 import { SettingsModule } from '@/components/SettingsModule';
 import { VisitorsModule } from '@/components/VisitorsModule';
+import { WorkLogAdminModule } from '@/components/WorkLogAdminModule';
+import { UserAdminModule } from '@/components/UserAdminModule';
+import { AskAiFab } from '@/components/AskAiFab';
 
 const PER_PAGE = 10;
 
 /* ── Nav items ───────────────────────────────────────────────────── */
-type Module = 'overview' | 'reward' | 'helpdesk' | 'settings' | 'visitors' | 'visitor-admin';
+type Module = 'overview' | 'reward' | 'helpdesk' | 'worklog' | 'settings' | 'visitors' | 'visitor-admin' | 'users';
 
 const VisitorIcon = () => <svg width={18} height={18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 11l-3 3-1.5-1.5"/></svg>;
 
 const NAV_ITEMS: Record<string, { key: Module; label: string; icon: () => JSX.Element }> = {
   overview: { key: 'overview', label: 'Overview', icon: () => <svg width={18} height={18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg> },
   helpdesk: { key: 'helpdesk', label: 'Help Desk', icon: () => <svg width={18} height={18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg> },
+  worklog: { key: 'worklog', label: 'Work Log', icon: () => <svg width={18} height={18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="15" y2="17"/></svg> },
   reward: { key: 'reward', label: 'Reward System', icon: () => <svg width={18} height={18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg> },
+  users: { key: 'users', label: 'User Management', icon: () => <svg width={18} height={18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg> },
   settings: { key: 'settings', label: 'Settings', icon: () => <svg width={18} height={18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg> },
 };
 
@@ -1036,8 +1041,9 @@ export default function AdminPage() {
     api.getMe().then(me => {
       setUser({ ...u, id: me.id, name: me.name, points: me.points });
     }).catch(() => {
-      localStorage.clear();
-      router.push('/');
+      // 401 is already handled in api.ts (clears storage + redirects).
+      // For network errors (backend down), keep the stored session.
+      setUser(u);
     });
   }, []);
 
@@ -1048,7 +1054,13 @@ export default function AdminPage() {
   // Order: Overview · Help Desk · Visitor Management · Reward · Settings
   // (Visitor entry is role-aware: HR → calendar, Admin → all visits)
   const visitorItem = { key: (user?.role === 'HR' ? 'visitors' : 'visitor-admin') as Module, label: 'Visitor Management', icon: VisitorIcon };
-  const navItems = [NAV_ITEMS.overview, NAV_ITEMS.helpdesk, visitorItem, NAV_ITEMS.reward, NAV_ITEMS.settings];
+  // User Management is ADMIN-only (backend enforces this on every endpoint;
+  // hiding it here is just UX for the HR view of this page).
+  const navItems = [
+    NAV_ITEMS.overview, NAV_ITEMS.helpdesk, visitorItem, NAV_ITEMS.worklog, NAV_ITEMS.reward,
+    ...(user?.role === 'ADMIN' ? [NAV_ITEMS.users] : []),
+    NAV_ITEMS.settings,
+  ];
 
   if (!user) return null;
 
@@ -1190,10 +1202,14 @@ export default function AdminPage() {
           {activeModule === 'overview'   && <AdminOverview user={user} onNavigate={setActiveModule} />}
           {activeModule === 'reward'     && <AdminRewardModule user={user} />}
           {activeModule === 'helpdesk'   && <AdminHelpdeskModule user={user} />}
+          {activeModule === 'worklog'    && <WorkLogAdminModule user={user} />}
+          {activeModule === 'users'      && user?.role === 'ADMIN' && <UserAdminModule user={user} />}
           {activeModule === 'settings'   && <SettingsModule user={user} onUpdated={u => setUser((prev: any) => ({ ...prev, name: u.name, designation: u.designation }))} />}
           {(activeModule === 'visitors' || activeModule === 'visitor-admin') && <VisitorsModule user={user} view={activeModule} />}
         </div>
       </div>
+
+      <AskAiFab />
     </div>
   );
 }

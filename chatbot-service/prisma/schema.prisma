@@ -1,0 +1,57 @@
+// ─────────────────────────────────────────────────────────────
+// Self-contained SQLite schema for the sidecar chatbot service.
+// No pgvector: embeddings are stored as JSON text and cosine
+// similarity is computed in JS (vector_search_services.js).
+// emp_id is just an int taken from the login JWT (`sub`) — this
+// service does not own the user table.
+// ─────────────────────────────────────────────────────────────
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model PolicyDoc {
+  pd_id     Int                @id @default(autoincrement())
+  file_name String?
+  full_text String?
+  uploadat  DateTime           @default(now())
+  chunks    ChunkedPolicyDoc[]
+}
+
+model ChunkedPolicyDoc {
+  cpd_id      Int        @id @default(autoincrement())
+  pd_id       Int?
+  chunk_index Int?
+  chunk_text  String?
+  // JSON-encoded number[] (the 768-dim embedding). SQLite has no vector type.
+  embedding   String?
+  policy      PolicyDoc? @relation(fields: [pd_id], references: [pd_id], onDelete: Cascade)
+
+  @@index([pd_id])
+}
+
+model ChatSession {
+  id         String   @id
+  title      String
+  // JSON-encoded array of { role, text } (SQLite has no Json scalar).
+  messages   String   @default("[]")
+  created_at DateTime @default(now())
+  updated_at DateTime @default(now())
+  emp_id     Int?
+
+  @@index([emp_id])
+  @@index([updated_at])
+}
+
+model QuestionLog {
+  id         Int      @id @default(autoincrement())
+  question   String
+  topic      String?  @default("OTHER")
+  session_id String?
+  asked_at   DateTime @default(now())
+}

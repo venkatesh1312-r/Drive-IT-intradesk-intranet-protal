@@ -14,6 +14,12 @@ enum Role {
   ADMIN
 }
 
+enum UserStatus {
+  AWAITING_APPROVAL
+  ACTIVE
+  REJECTED
+}
+
 enum NominationStatus {
   PENDING
   ESCALATED
@@ -66,12 +72,27 @@ enum VisitStatus {
   CANCELLED
 }
 
+enum ContributionType {
+  FEATURE
+  BUG_FIX
+  IMPROVEMENT
+  DOCUMENTATION
+  MEETING
+  OTHER
+}
+
 model User {
   id              Int                 @id @default(autoincrement())
   name            String
   email           String              @unique
-  password        String
-  role            Role                @default(EMPLOYEE)
+  // Nullable: new signups have no role until an admin assigns one.
+  role            Role?
+  status          UserStatus          @default(AWAITING_APPROVAL)
+  // ── OTP login ──
+  otpHash         String?
+  otpExpiresAt    DateTime?
+  otpAttempts     Int                 @default(0)
+  lastOtpSentAt   DateTime?
   department      Department?
   designation     String?
   points          Int                 @default(0)
@@ -86,6 +107,9 @@ model User {
   notifications   InAppNotification[]
   createdVisits   Visit[]             @relation("VisitCreatedBy")
   hostedVisits    Visit[]             @relation("VisitHost")
+  projectMemberships ProjectMember[]
+  workLogEntries  WorkLogEntry[]
+  workLogComments WorkLogComment[]
 }
 
 model Nomination {
@@ -220,4 +244,61 @@ model InAppNotification {
   createdAt     DateTime @default(now())
 
   @@index([userId, isRead])
+}
+
+model Project {
+  id          Int             @id @default(autoincrement())
+  name        String          @unique
+  description String?
+  isActive    Boolean         @default(true)
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+  members     ProjectMember[]
+  workLogEntries WorkLogEntry[]
+}
+
+model ProjectMember {
+  id        Int      @id @default(autoincrement())
+  projectId Int
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  userId    Int
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([projectId, userId])
+  @@index([userId])
+}
+
+// Intentionally has no hours/duration/start-end fields — Work Log tracks
+// what was done, not how long it took.
+model WorkLogEntry {
+  id               Int               @id @default(autoincrement())
+  employeeId       Int
+  employee         User              @relation(fields: [employeeId], references: [id])
+  projectId        Int
+  project          Project           @relation(fields: [projectId], references: [id])
+  entryDate        DateTime          @db.Date
+  contributionType ContributionType
+  description      String            @db.Text
+  link             String?
+  tags             String[]          @default([])
+  edited           Boolean           @default(false)
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  comments         WorkLogComment[]
+
+  @@index([employeeId, entryDate])
+  @@index([projectId, entryDate])
+}
+
+model WorkLogComment {
+  id        Int          @id @default(autoincrement())
+  entryId   Int
+  entry     WorkLogEntry @relation(fields: [entryId], references: [id], onDelete: Cascade)
+  authorId  Int
+  author    User         @relation(fields: [authorId], references: [id])
+  message   String
+  createdAt DateTime     @default(now())
+
+  @@index([entryId])
 }

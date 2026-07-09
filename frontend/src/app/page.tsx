@@ -1,17 +1,12 @@
 'use client';
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { DriveITLogo } from '@/components/DriveITLogo';
 
 import { api } from '@/lib/api';
 
-/* Dev credentials — only used when backend is unreachable */
-const DEV_USERS = [
-  { email: 'admin@driveit.in',    password: 'admin123',    role: 'ADMIN',    name: 'Admin',       points: 0   },
-  { email: 'hr@driveit.in',       password: 'hr123',       role: 'HR',       name: 'HR Officer',  points: 0   },
-  { email: 'it@driveit.in',       password: 'it@123',      role: 'IT',       name: 'IT Support',  points: 0   },
-  { email: 'employee@driveit.in', password: 'employee123', role: 'EMPLOYEE', name: 'Riya Sharma', points: 120 },
-];
+/* OTP login rule — must mirror the backend DTO */
+const EMAIL_RULE = /^[a-z]+\.[a-z]@driveittech\.in$/;
 
 const homeFor = (role: string) =>
   role === 'HR' ? '/hr' : role === 'ADMIN' ? '/admin' : role === 'IT' ? '/it' : '/dashboard';
@@ -25,40 +20,71 @@ const IEmail = () => (
     <rect x="2" y="4" width="20" height="16" rx="2" /><path d="M2 7l10 7 10-7" />
   </svg>
 );
-const ILock = () => (
+const IShield = () => (
   <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-    <rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0110 0v4" />
+    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
   </svg>
 );
-const IEye = ({ open }: { open: boolean }) => open ? (
-  <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" />
-  </svg>
-) : (
-  <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-    <path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24" />
-    <line x1="1" y1="1" x2="23" y2="23" />
+const IClock = () => (
+  <svg width={28} height={28} viewBox="0 0 24 24" fill="none" stroke="#b45309" strokeWidth="1.8">
+    <circle cx="12" cy="12" r="9" /><polyline points="12 7 12 12 15 14" />
   </svg>
 );
+
+type Step = 'email' | 'otp' | 'pending';
 
 export default function LoginPage() {
   const router = useRouter();
+  const [step, setStep]         = useState<Step>('email');
   const [email, setEmail]       = useState('');
-  const [password, setPassword] = useState('');
-  const [showPwd, setShowPwd]   = useState(false);
+  const [otp, setOtp]           = useState('');
   const [error, setError]       = useState('');
+  const [info, setInfo]         = useState('');
   const [loading, setLoading]   = useState(false);
+  const [cooldown, setCooldown] = useState(0);
+  const otpRef = useRef<HTMLInputElement>(null);
 
-  async function handleLogin(e: React.FormEvent) {
-    e.preventDefault();
-    if (!email || !password) { setError('Please fill all fields.'); return; }
-    if (!email.toLowerCase().endsWith('@driveit.in')) {
-      setError('Only @driveit.in email addresses are permitted.');
+  /* Resend cooldown ticker */
+  useEffect(() => {
+    if (cooldown <= 0) return;
+    const t = setInterval(() => setCooldown(c => (c > 0 ? c - 1 : 0)), 1000);
+    return () => clearInterval(t);
+  }, [cooldown > 0]);
+
+  useEffect(() => { if (step === 'otp') otpRef.current?.focus(); }, [step]);
+
+  async function sendOtp(e?: React.FormEvent) {
+    e?.preventDefault();
+    const em = email.trim().toLowerCase();
+    if (!EMAIL_RULE.test(em)) {
+      setError('Use your company email: firstname.initial@driveittech.in');
       return;
     }
-    setLoading(true); setError('');
+    setLoading(true); setError(''); setInfo('');
     try {
-      const res = await api.login({ email: email.toLowerCase().trim(), password });
+      const res = await api.requestOtp(em);
+      setEmail(em);
+      setOtp('');
+      setCooldown(res.resendIn ?? 60);
+      setInfo('A 6-digit code has been sent to your email.');
+      setStep('otp');
+    } catch (err: any) {
+      setError(err.message || 'Could not send the code. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function verify(e?: React.FormEvent) {
+    e?.preventDefault();
+    if (otp.length !== 6 || loading) return;
+    setLoading(true); setError(''); setInfo('');
+    try {
+      const res = await api.verifyOtp(email, otp);
+      if (res.pending) {
+        setStep('pending');
+        return;
+      }
       localStorage.setItem('token', res.access_token);
       localStorage.setItem('user', JSON.stringify({
         email: res.user.email,
@@ -67,23 +93,24 @@ export default function LoginPage() {
         points: res.user.points ?? 0,
       }));
       router.push(homeFor(res.user.role));
-    } catch (e: any) {
-      const isNetworkError = e.name === 'AbortError' || e.message?.includes('fetch') || e.message?.includes('network') || e.message?.includes('aborted');
-      if (isNetworkError) {
-        const match = DEV_USERS.find(u => u.email === email.toLowerCase().trim() && u.password === password);
-        if (match) {
-          localStorage.setItem('token', 'dev-token');
-          localStorage.setItem('user', JSON.stringify({ email: match.email, name: match.name, role: match.role, points: match.points }));
-          router.push(homeFor(match.role));
-          return;
-        }
-        setError('Invalid email or password.');
-      } else {
-        setError(e.message || 'Login failed. Please try again.');
-      }
+    } catch (err: any) {
+      setError(err.message || 'Verification failed. Please try again.');
+      setOtp('');
       setLoading(false);
+      otpRef.current?.focus();
     }
   }
+
+  function backToEmail() {
+    setStep('email'); setOtp(''); setError(''); setInfo('');
+  }
+
+  const inputBase: React.CSSProperties = {
+    width: '100%', height: 50, border: '1.5px solid #94a3b8', borderRadius: 10,
+    fontSize: 14, color: '#1e293b', background: '#f8fafc', transition: 'border-color 150ms',
+  };
+  const focus = (e: React.FocusEvent<HTMLInputElement>) => { e.target.style.borderColor = '#2563eb'; e.target.style.background = '#ffffff'; };
+  const blur  = (e: React.FocusEvent<HTMLInputElement>) => { e.target.style.borderColor = '#94a3b8'; e.target.style.background = '#f8fafc'; };
 
   return (
     <div style={{ display: 'flex', minHeight: '100vh' }}>
@@ -157,57 +184,103 @@ export default function LoginPage() {
             </h1>
             <div>
               <p style={{ fontSize: 18, fontWeight: 700, color: '#1e293b', marginBottom: 4 }}>Hello Again!</p>
-              <p style={{ fontSize: 14, color: '#64748b', fontWeight: 400 }}>Welcome Back</p>
+              <p style={{ fontSize: 14, color: '#64748b', fontWeight: 400 }}>Sign in with a one-time code</p>
             </div>
           </div>
 
-          {/* Form */}
+          {/* Form column */}
           <div style={{ width: 340, flexShrink: 0 }}>
-            <form onSubmit={handleLogin}>
-              {/* Email */}
-              <div style={{ marginBottom: 14, position: 'relative' }}>
-                <div style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', color: '#64748b', pointerEvents: 'none' }}>
-                  <IEmail />
-                </div>
-                <input
-                  type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="Email Address"
-                  style={{ width: '100%', height: 50, border: '1.5px solid #94a3b8', borderRadius: 10, paddingLeft: 42, paddingRight: 14, fontSize: 14, color: '#1e293b', background: '#f8fafc', transition: 'border-color 150ms' }}
-                  onFocus={e => { e.target.style.borderColor = '#2563eb'; e.target.style.background = '#ffffff'; }}
-                  onBlur={e =>  { e.target.style.borderColor = '#94a3b8'; e.target.style.background = '#f8fafc'; }}
-                />
-              </div>
 
-              {/* Password */}
-              <div style={{ marginBottom: 20, position: 'relative' }}>
-                <div style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', color: '#64748b', pointerEvents: 'none' }}>
-                  <ILock />
+            {/* Step 1 — email */}
+            {step === 'email' && (
+              <form onSubmit={sendOtp}>
+                <div style={{ marginBottom: 14, position: 'relative' }}>
+                  <div style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', color: '#64748b', pointerEvents: 'none' }}>
+                    <IEmail />
+                  </div>
+                  <input
+                    type="email" value={email} onChange={e => setEmail(e.target.value)}
+                    placeholder="firstname.i@driveittech.in" autoComplete="email"
+                    style={{ ...inputBase, paddingLeft: 42, paddingRight: 14 }}
+                    onFocus={focus} onBlur={blur}
+                  />
                 </div>
-                <input
-                  type={showPwd ? 'text' : 'password'} value={password} onChange={e => setPassword(e.target.value)} placeholder="Password"
-                  style={{ width: '100%', height: 50, border: '1.5px solid #94a3b8', borderRadius: 10, paddingLeft: 42, paddingRight: 44, fontSize: 14, color: '#1e293b', background: '#f8fafc', transition: 'border-color 150ms' }}
-                  onFocus={e => { e.target.style.borderColor = '#2563eb'; e.target.style.background = '#ffffff'; }}
-                  onBlur={e =>  { e.target.style.borderColor = '#94a3b8'; e.target.style.background = '#f8fafc'; }}
-                />
-                <button type="button" onClick={() => setShowPwd(!showPwd)}
-                  style={{ position: 'absolute', right: 14, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center' }}>
-                  <IEye open={showPwd} />
+                <p style={{ fontSize: 12, color: '#94a3b8', marginBottom: 18, lineHeight: 1.5 }}>
+                  We&apos;ll email you a 6-digit code — no password needed.
+                </p>
+
+                {error && <p style={{ fontSize: 13, color: '#ef4444', marginBottom: 14, textAlign: 'center' }}>{error}</p>}
+
+                <button type="submit" disabled={loading}
+                  style={{ width: '100%', height: 50, borderRadius: 12, background: loading ? '#93c5fd' : '#2563eb', border: 'none', color: '#ffffff', fontSize: 15, fontWeight: 700, cursor: loading ? 'not-allowed' : 'pointer', transition: 'background 150ms', letterSpacing: '0.01em' }}
+                  onMouseEnter={e => { if (!loading) (e.currentTarget.style.background = '#1d4ed8'); }}
+                  onMouseLeave={e => { if (!loading) (e.currentTarget.style.background = '#2563eb'); }}>
+                  {loading ? 'Sending code…' : 'Send login code'}
+                </button>
+              </form>
+            )}
+
+            {/* Step 2 — OTP */}
+            {step === 'otp' && (
+              <form onSubmit={verify}>
+                <p style={{ fontSize: 13, color: '#64748b', marginBottom: 14, lineHeight: 1.5 }}>
+                  Enter the code sent to <strong style={{ color: '#1e293b' }}>{email}</strong>
+                </p>
+                <div style={{ marginBottom: 14, position: 'relative' }}>
+                  <div style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', color: '#64748b', pointerEvents: 'none' }}>
+                    <IShield />
+                  </div>
+                  <input
+                    ref={otpRef}
+                    type="text" inputMode="numeric" autoComplete="one-time-code" maxLength={6}
+                    value={otp}
+                    onChange={e => setOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                    placeholder="••••••"
+                    style={{ ...inputBase, paddingLeft: 42, paddingRight: 14, letterSpacing: 8, fontWeight: 700, fontSize: 18 }}
+                    onFocus={focus} onBlur={blur}
+                  />
+                </div>
+
+                {info && !error && <p style={{ fontSize: 13, color: '#16a34a', marginBottom: 14, textAlign: 'center' }}>{info}</p>}
+                {error && <p style={{ fontSize: 13, color: '#ef4444', marginBottom: 14, textAlign: 'center' }}>{error}</p>}
+
+                <button type="submit" disabled={loading || otp.length !== 6}
+                  style={{ width: '100%', height: 50, borderRadius: 12, background: loading || otp.length !== 6 ? '#93c5fd' : '#2563eb', border: 'none', color: '#ffffff', fontSize: 15, fontWeight: 700, cursor: loading || otp.length !== 6 ? 'not-allowed' : 'pointer', transition: 'background 150ms', letterSpacing: '0.01em' }}
+                  onMouseEnter={e => { if (!loading && otp.length === 6) (e.currentTarget.style.background = '#1d4ed8'); }}
+                  onMouseLeave={e => { if (!loading && otp.length === 6) (e.currentTarget.style.background = '#2563eb'); }}>
+                  {loading ? 'Verifying…' : 'Verify & sign in'}
+                </button>
+
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 16 }}>
+                  <button type="button" onClick={backToEmail}
+                    style={{ background: 'none', border: 'none', fontSize: 13, color: '#64748b', cursor: 'pointer', padding: 0 }}>
+                    ← Different email
+                  </button>
+                  <button type="button" onClick={() => sendOtp()} disabled={cooldown > 0 || loading}
+                    style={{ background: 'none', border: 'none', fontSize: 13, color: cooldown > 0 ? '#94a3b8' : '#2563eb', cursor: cooldown > 0 ? 'default' : 'pointer', padding: 0, fontWeight: 600 }}>
+                    {cooldown > 0 ? `Resend in ${cooldown}s` : 'Resend code'}
+                  </button>
+                </div>
+              </form>
+            )}
+
+            {/* Step 3 — pending approval */}
+            {step === 'pending' && (
+              <div style={{ textAlign: 'center', padding: '8px 0' }}>
+                <div style={{ width: 64, height: 64, borderRadius: 18, background: '#fffbeb', border: '1px solid #fcd34d', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 18px' }}>
+                  <IClock />
+                </div>
+                <p style={{ fontSize: 17, fontWeight: 700, color: '#1e293b', marginBottom: 8 }}>Awaiting approval</p>
+                <p style={{ fontSize: 13.5, color: '#64748b', lineHeight: 1.6, marginBottom: 22 }}>
+                  Your email <strong style={{ color: '#1e293b' }}>{email}</strong> is verified.
+                  An administrator needs to approve your account and assign your role before you can enter the portal.
+                </p>
+                <button onClick={backToEmail}
+                  style={{ height: 42, padding: '0 22px', borderRadius: 10, background: '#ffffff', border: '1.5px solid #cbd5e1', color: '#334155', fontSize: 13.5, fontWeight: 600, cursor: 'pointer' }}>
+                  Back to sign in
                 </button>
               </div>
-
-              {error && <p style={{ fontSize: 13, color: '#ef4444', marginBottom: 14, textAlign: 'center' }}>{error}</p>}
-
-              {/* Login button */}
-              <button type="submit" disabled={loading}
-                style={{ width: '100%', height: 50, borderRadius: 12, background: loading ? '#93c5fd' : '#2563eb', border: 'none', color: '#ffffff', fontSize: 15, fontWeight: 700, cursor: loading ? 'not-allowed' : 'pointer', transition: 'background 150ms', letterSpacing: '0.01em' }}
-                onMouseEnter={e => { if (!loading) (e.currentTarget.style.background = '#1d4ed8'); }}
-                onMouseLeave={e => { if (!loading) (e.currentTarget.style.background = '#2563eb'); }}>
-                {loading ? 'Signing in…' : 'Login'}
-              </button>
-
-              <p style={{ textAlign: 'center', marginTop: 16, fontSize: 13, color: '#94a3b8', cursor: 'pointer' }}>
-                Forgot Password?
-              </p>
-            </form>
+            )}
           </div>
         </div>
 

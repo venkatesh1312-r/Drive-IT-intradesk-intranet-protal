@@ -7,8 +7,10 @@ import { CommentsModule } from './comments/comments.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { AuditModule } from './audit/audit.module';
 import { VisitorsModule } from './visitors/visitors.module';
+import { ProjectsModule } from './projects/projects.module';
+import { WorkLogModule } from './work-log/work-log.module';
 
 @Module({
-  imports: [AuthModule, NominationsModule, UsersModule, TicketsModule, CommentsModule, NotificationsModule, AuditModule, VisitorsModule],
+  imports: [AuthModule, NominationsModule, UsersModule, TicketsModule, CommentsModule, NotificationsModule, AuditModule, VisitorsModule, ProjectsModule, WorkLogModule],
 })
 export class AppModule {}

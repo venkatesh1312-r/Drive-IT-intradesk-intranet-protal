@@ -28,7 +28,7 @@ export function SettingsModule({ user, onUpdated }: { user: any; onUpdated?: (u:
 
   // Sub-navigation, role-aware
   const groups: { group: string; items: { key: string; label: string; soon?: boolean; desc?: string }[] }[] = [
-    { group: 'Account', items: [{ key: 'profile', label: 'Profile' }, { key: 'password', label: 'Password' }] },
+    { group: 'Account', items: [{ key: 'profile', label: 'Profile' }] },
     { group: 'Preferences', items: [{ key: 'notifications', label: 'Notifications' }] },
   ];
   if (isHR) {
@@ -82,8 +82,7 @@ export function SettingsModule({ user, onUpdated }: { user: any; onUpdated?: (u:
 
       {/* Content */}
       <div>
-        {active === 'profile' && <ProfileSection user={user} onUpdated={onUpdated} goTo={setActive} />}
-        {active === 'password' && <PasswordSection />}
+        {active === 'profile' && <ProfileSection user={user} onUpdated={onUpdated} />}
         {active === 'notifications' && <NotificationsSection user={user} />}
         {activeItem?.soon && <ComingSoonSection label={activeItem.label} desc={activeItem.desc} />}
       </div>
@@ -92,7 +91,7 @@ export function SettingsModule({ user, onUpdated }: { user: any; onUpdated?: (u:
 }
 
 /* ── Profile ── (read-only rows with a per-field "Edit" link, matching the reference) */
-function ProfileSection({ user, onUpdated, goTo }: { user: any; onUpdated?: (u: any) => void; goTo: (k: string) => void }) {
+function ProfileSection({ user, onUpdated }: { user: any; onUpdated?: (u: any) => void }) {
   const [name, setName] = useState(user?.name || '');
   const [designation, setDesignation] = useState(user?.designation || '');
   const [editing, setEditing] = useState<null | 'name' | 'designation'>(null);
@@ -178,63 +177,12 @@ function ProfileSection({ user, onUpdated, goTo }: { user: any; onUpdated?: (u: 
       <div style={{ ...card, padding: '4px 20px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16, padding: '16px 0' }}>
           <div>
-            <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)' }}>Password</p>
-            <p style={{ fontSize: 12, color: 'var(--text-faint)', marginTop: 2 }}>Last changed is kept private</p>
+            <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)' }}>Sign-in method</p>
+            <p style={{ fontSize: 12, color: 'var(--text-faint)', marginTop: 2 }}>A one-time code is emailed to you each time you sign in</p>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-            <span style={{ fontSize: 14, color: 'var(--text-faint)', letterSpacing: 2 }}>••••••••</span>
-            <button style={editLink} onClick={() => goTo('password')}>Change</button>
-          </div>
+          <span style={{ fontSize: 13, color: 'var(--text-faint)', fontWeight: 500 }}>Email code (OTP)</span>
         </div>
       </div>
-    </div>
-  );
-}
-
-/* ── Password ── */
-function PasswordSection() {
-  const [cur, setCur] = useState('');
-  const [next, setNext] = useState('');
-  const [confirm, setConfirm] = useState('');
-  const [saving, setSaving] = useState(false);
-  const [msg, setMsg] = useState('');
-
-  async function save(e: React.FormEvent) {
-    e.preventDefault();
-    setMsg('');
-    if (next.length < 6) { setMsg('New password must be at least 6 characters.'); return; }
-    if (next !== confirm) { setMsg('New passwords do not match.'); return; }
-    setSaving(true);
-    try {
-      await api.changePassword({ currentPassword: cur, newPassword: next });
-      setMsg('✓ Password changed');
-      setCur(''); setNext(''); setConfirm('');
-    } catch (e: any) { setMsg(e.message || 'Failed to change password.'); }
-    finally { setSaving(false); }
-  }
-
-  const field = (label: string, val: string, set: (v: string) => void) => (
-    <div style={{ marginBottom: 14 }}>
-      <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-soft)', display: 'block', marginBottom: 5 }}>{label}</label>
-      <input type="password" style={inputStyle} value={val} onChange={e => set(e.target.value)} />
-    </div>
-  );
-
-  return (
-    <div>
-      <h2 style={{ fontSize: 18, fontWeight: 700, color: 'var(--text)' }}>Password</h2>
-      <p style={{ fontSize: 13, color: 'var(--text-muted)', marginTop: 3, marginBottom: 18 }}>Choose a strong password you don't use elsewhere.</p>
-      <form onSubmit={save} style={{ ...card, padding: '20px', maxWidth: 420 }}>
-        {field('Current password', cur, setCur)}
-        {field('New password', next, setNext)}
-        {field('Confirm new password', confirm, setConfirm)}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 4 }}>
-          <button type="submit" disabled={saving || !cur || !next || !confirm} style={{ height: 38, padding: '0 18px', borderRadius: 8, background: 'var(--accent)', border: 'none', color: 'white', fontSize: 13, fontWeight: 600, cursor: saving ? 'not-allowed' : 'pointer', opacity: (!cur || !next || !confirm) ? 0.6 : 1 }}>
-            {saving ? 'Updating…' : 'Update password'}
-          </button>
-          {msg && <span style={{ fontSize: 13, fontWeight: 500, color: msg.startsWith('✓') ? '#16a34a' : '#dc2626' }}>{msg}</span>}
-        </div>
-      </form>
     </div>
   );
 }
