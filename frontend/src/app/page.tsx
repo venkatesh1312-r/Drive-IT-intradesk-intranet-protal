@@ -1,5 +1,5 @@
 'use client';
-import { useState, useRef, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { DriveITLogo } from '@/components/DriveITLogo';
 
@@ -20,29 +20,30 @@ const IEmail = () => (
     <rect x="2" y="4" width="20" height="16" rx="2" /><path d="M2 7l10 7 10-7" />
   </svg>
 );
-const IShield = () => (
+const ILock = () => (
   <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+    <rect x="3" y="11" width="18" height="10" rx="2" /><path d="M7 11V7a5 5 0 0110 0v4" />
   </svg>
 );
-const IClock = () => (
-  <svg width={28} height={28} viewBox="0 0 24 24" fill="none" stroke="#b45309" strokeWidth="1.8">
-    <circle cx="12" cy="12" r="9" /><polyline points="12 7 12 12 15 14" />
+const IMail = () => (
+  <svg width={28} height={28} viewBox="0 0 24 24" fill="none" stroke="#2563eb" strokeWidth="1.8">
+    <rect x="2" y="4" width="20" height="16" rx="2" /><path d="M2 7l10 7 10-7" />
   </svg>
 );
 
-type Step = 'email' | 'otp' | 'pending';
+type Tab = 'signin' | 'signup';
+type Step = 'form' | 'sent';
 
 export default function LoginPage() {
   const router = useRouter();
-  const [step, setStep]         = useState<Step>('email');
+  const [tab, setTab]           = useState<Tab>('signin');
+  const [step, setStep]         = useState<Step>('form');
   const [email, setEmail]       = useState('');
-  const [otp, setOtp]           = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError]       = useState('');
   const [info, setInfo]         = useState('');
   const [loading, setLoading]   = useState(false);
   const [cooldown, setCooldown] = useState(0);
-  const otpRef = useRef<HTMLInputElement>(null);
 
   /* Resend cooldown ticker */
   useEffect(() => {
@@ -51,38 +52,26 @@ export default function LoginPage() {
     return () => clearInterval(t);
   }, [cooldown > 0]);
 
-  useEffect(() => { if (step === 'otp') otpRef.current?.focus(); }, [step]);
+  function switchTab(next: Tab) {
+    setTab(next); setStep('form'); setEmail(''); setPassword(''); setError(''); setInfo('');
+  }
 
-  async function sendOtp(e?: React.FormEvent) {
+  async function submitSignIn(e?: React.FormEvent) {
     e?.preventDefault();
     const em = email.trim().toLowerCase();
     if (!EMAIL_RULE.test(em)) {
       setError('Use your company email: firstname.initial@driveittech.in');
       return;
     }
-    setLoading(true); setError(''); setInfo('');
-    try {
-      const res = await api.requestOtp(em);
-      setEmail(em);
-      setOtp('');
-      setCooldown(res.resendIn ?? 60);
-      setInfo('A 6-digit code has been sent to your email.');
-      setStep('otp');
-    } catch (err: any) {
-      setError(err.message || 'Could not send the code. Please try again.');
-    } finally {
-      setLoading(false);
+    if (!password) {
+      setError('Enter your password.');
+      return;
     }
-  }
-
-  async function verify(e?: React.FormEvent) {
-    e?.preventDefault();
-    if (otp.length !== 6 || loading) return;
     setLoading(true); setError(''); setInfo('');
     try {
-      const res = await api.verifyOtp(email, otp);
+      const res = await api.login(em, password);
       if (res.pending) {
-        setStep('pending');
+        setError('Your account is not active yet. Please contact the administrator.');
         return;
       }
       localStorage.setItem('token', res.access_token);
@@ -94,15 +83,60 @@ export default function LoginPage() {
       }));
       router.push(homeFor(res.user.role));
     } catch (err: any) {
-      setError(err.message || 'Verification failed. Please try again.');
-      setOtp('');
+      setError(err.message || 'Sign in failed. Please try again.');
+    } finally {
       setLoading(false);
-      otpRef.current?.focus();
     }
   }
 
-  function backToEmail() {
-    setStep('email'); setOtp(''); setError(''); setInfo('');
+  async function submitSignUp(e?: React.FormEvent) {
+    e?.preventDefault();
+    const em = email.trim().toLowerCase();
+    if (!EMAIL_RULE.test(em)) {
+      setError('Use your company email: firstname.initial@driveittech.in');
+      return;
+    }
+    setLoading(true); setError(''); setInfo('');
+    try {
+      await api.signup(em);
+      setEmail(em);
+      setCooldown(60);
+      setStep('sent');
+    } catch (err: any) {
+      setError(err.message || 'Could not send the setup link. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function resendSignupLink() {
+    if (cooldown > 0 || loading) return;
+    setLoading(true); setError('');
+    try {
+      await api.signup(email);
+      setCooldown(60);
+    } catch (err: any) {
+      setError(err.message || 'Could not resend the link.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function submitForgotPassword() {
+    const em = email.trim().toLowerCase();
+    if (!EMAIL_RULE.test(em)) {
+      setError('Enter your company email above first, then click "Forgot password?".');
+      return;
+    }
+    setLoading(true); setError(''); setInfo('');
+    try {
+      await api.forgotPassword(em);
+      setInfo('If an account exists for that email, a reset link has been sent.');
+    } catch (err: any) {
+      setError(err.message || 'Could not send the reset link.');
+    } finally {
+      setLoading(false);
+    }
   }
 
   const inputBase: React.CSSProperties = {
@@ -183,17 +217,90 @@ export default function LoginPage() {
               Intranet Portal
             </h1>
             <div>
-              <p style={{ fontSize: 18, fontWeight: 700, color: '#1e293b', marginBottom: 4 }}>Hello Again!</p>
-              <p style={{ fontSize: 14, color: '#64748b', fontWeight: 400 }}>Sign in with a one-time code</p>
+              <p style={{ fontSize: 18, fontWeight: 700, color: '#1e293b', marginBottom: 4 }}>
+                {tab === 'signin' ? 'Hello Again!' : 'New here?'}
+              </p>
+              <p style={{ fontSize: 14, color: '#64748b', fontWeight: 400 }}>
+                {tab === 'signin' ? 'Sign in with your email and password' : 'Enter your email to get started'}
+              </p>
             </div>
           </div>
 
           {/* Form column */}
           <div style={{ width: 340, flexShrink: 0 }}>
 
-            {/* Step 1 — email */}
-            {step === 'email' && (
-              <form onSubmit={sendOtp}>
+            {/* Sign In / Sign Up toggle */}
+            <div style={{ display: 'flex', background: '#e2e8f0', borderRadius: 12, padding: 4, marginBottom: 22 }}>
+              <button type="button" onClick={() => switchTab('signin')}
+                style={{
+                  flex: 1, height: 42, borderRadius: 9, border: 'none', cursor: 'pointer',
+                  fontSize: 14, fontWeight: 700, transition: 'background 150ms, color 150ms',
+                  background: tab === 'signin' ? '#1e3a8a' : 'transparent',
+                  color: tab === 'signin' ? '#ffffff' : '#475569',
+                }}>
+                Sign In
+              </button>
+              <button type="button" onClick={() => switchTab('signup')}
+                style={{
+                  flex: 1, height: 42, borderRadius: 9, border: 'none', cursor: 'pointer',
+                  fontSize: 14, fontWeight: 700, transition: 'background 150ms, color 150ms',
+                  background: tab === 'signup' ? '#1e3a8a' : 'transparent',
+                  color: tab === 'signup' ? '#ffffff' : '#475569',
+                }}>
+                Sign Up
+              </button>
+            </div>
+
+            {/* ── Sign In: email + password ── */}
+            {tab === 'signin' && (
+              <form onSubmit={submitSignIn}>
+                <label style={{ fontSize: 13, fontWeight: 700, color: '#1e293b', display: 'block', marginBottom: 6 }}>Email</label>
+                <div style={{ marginBottom: 14, position: 'relative' }}>
+                  <div style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', color: '#64748b', pointerEvents: 'none' }}>
+                    <IEmail />
+                  </div>
+                  <input
+                    type="email" value={email} onChange={e => setEmail(e.target.value)}
+                    placeholder="firstname.i@driveittech.in" autoComplete="email"
+                    style={{ ...inputBase, paddingLeft: 42, paddingRight: 14 }}
+                    onFocus={focus} onBlur={blur}
+                  />
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                  <label style={{ fontSize: 13, fontWeight: 700, color: '#1e293b' }}>Password</label>
+                  <button type="button" onClick={submitForgotPassword} disabled={loading}
+                    style={{ background: 'none', border: 'none', fontSize: 13, color: '#2563eb', cursor: 'pointer', padding: 0, fontWeight: 600 }}>
+                    Forgot password?
+                  </button>
+                </div>
+                <div style={{ marginBottom: 14, position: 'relative' }}>
+                  <div style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', color: '#64748b', pointerEvents: 'none' }}>
+                    <ILock />
+                  </div>
+                  <input
+                    type="password" value={password} onChange={e => setPassword(e.target.value)}
+                    placeholder="Enter your password" autoComplete="current-password"
+                    style={{ ...inputBase, paddingLeft: 42, paddingRight: 14 }}
+                    onFocus={focus} onBlur={blur}
+                  />
+                </div>
+
+                {info && !error && <p style={{ fontSize: 13, color: '#16a34a', marginBottom: 14, textAlign: 'center' }}>{info}</p>}
+                {error && <p style={{ fontSize: 13, color: '#ef4444', marginBottom: 14, textAlign: 'center' }}>{error}</p>}
+
+                <button type="submit" disabled={loading}
+                  style={{ width: '100%', height: 50, borderRadius: 12, background: loading ? '#93c5fd' : '#2563eb', border: 'none', color: '#ffffff', fontSize: 15, fontWeight: 700, cursor: loading ? 'not-allowed' : 'pointer', transition: 'background 150ms', letterSpacing: '0.01em' }}
+                  onMouseEnter={e => { if (!loading) (e.currentTarget.style.background = '#1d4ed8'); }}
+                  onMouseLeave={e => { if (!loading) (e.currentTarget.style.background = '#2563eb'); }}>
+                  {loading ? 'Signing in…' : 'Login'}
+                </button>
+              </form>
+            )}
+
+            {/* ── Sign Up: email only → activation link email ── */}
+            {tab === 'signup' && step === 'form' && (
+              <form onSubmit={submitSignUp}>
                 <div style={{ marginBottom: 14, position: 'relative' }}>
                   <div style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', color: '#64748b', pointerEvents: 'none' }}>
                     <IEmail />
@@ -206,7 +313,7 @@ export default function LoginPage() {
                   />
                 </div>
                 <p style={{ fontSize: 12, color: '#94a3b8', marginBottom: 18, lineHeight: 1.5 }}>
-                  We&apos;ll email you a 6-digit code — no password needed.
+                  We&apos;ll email you a link to set up your password.
                 </p>
 
                 {error && <p style={{ fontSize: 13, color: '#ef4444', marginBottom: 14, textAlign: 'center' }}>{error}</p>}
@@ -215,70 +322,34 @@ export default function LoginPage() {
                   style={{ width: '100%', height: 50, borderRadius: 12, background: loading ? '#93c5fd' : '#2563eb', border: 'none', color: '#ffffff', fontSize: 15, fontWeight: 700, cursor: loading ? 'not-allowed' : 'pointer', transition: 'background 150ms', letterSpacing: '0.01em' }}
                   onMouseEnter={e => { if (!loading) (e.currentTarget.style.background = '#1d4ed8'); }}
                   onMouseLeave={e => { if (!loading) (e.currentTarget.style.background = '#2563eb'); }}>
-                  {loading ? 'Sending code…' : 'Send login code'}
+                  {loading ? 'Sending link…' : 'Send setup link'}
                 </button>
               </form>
             )}
 
-            {/* Step 2 — OTP */}
-            {step === 'otp' && (
-              <form onSubmit={verify}>
-                <p style={{ fontSize: 13, color: '#64748b', marginBottom: 14, lineHeight: 1.5 }}>
-                  Enter the code sent to <strong style={{ color: '#1e293b' }}>{email}</strong>
-                </p>
-                <div style={{ marginBottom: 14, position: 'relative' }}>
-                  <div style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', color: '#64748b', pointerEvents: 'none' }}>
-                    <IShield />
-                  </div>
-                  <input
-                    ref={otpRef}
-                    type="text" inputMode="numeric" autoComplete="one-time-code" maxLength={6}
-                    value={otp}
-                    onChange={e => setOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                    placeholder="••••••"
-                    style={{ ...inputBase, paddingLeft: 42, paddingRight: 14, letterSpacing: 8, fontWeight: 700, fontSize: 18 }}
-                    onFocus={focus} onBlur={blur}
-                  />
+            {/* ── Sign Up: link sent confirmation ── */}
+            {tab === 'signup' && step === 'sent' && (
+              <div style={{ textAlign: 'center', padding: '8px 0' }}>
+                <div style={{ width: 64, height: 64, borderRadius: 18, background: '#eff6ff', border: '1px solid #bfdbfe', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 18px' }}>
+                  <IMail />
                 </div>
+                <p style={{ fontSize: 17, fontWeight: 700, color: '#1e293b', marginBottom: 8 }}>Check your email</p>
+                <p style={{ fontSize: 13.5, color: '#64748b', lineHeight: 1.6, marginBottom: 18 }}>
+                  If an account exists for <strong style={{ color: '#1e293b' }}>{email}</strong>, we&apos;ve sent a link to set up your password. The link expires in 30 minutes.
+                </p>
 
-                {info && !error && <p style={{ fontSize: 13, color: '#16a34a', marginBottom: 14, textAlign: 'center' }}>{info}</p>}
                 {error && <p style={{ fontSize: 13, color: '#ef4444', marginBottom: 14, textAlign: 'center' }}>{error}</p>}
 
-                <button type="submit" disabled={loading || otp.length !== 6}
-                  style={{ width: '100%', height: 50, borderRadius: 12, background: loading || otp.length !== 6 ? '#93c5fd' : '#2563eb', border: 'none', color: '#ffffff', fontSize: 15, fontWeight: 700, cursor: loading || otp.length !== 6 ? 'not-allowed' : 'pointer', transition: 'background 150ms', letterSpacing: '0.01em' }}
-                  onMouseEnter={e => { if (!loading && otp.length === 6) (e.currentTarget.style.background = '#1d4ed8'); }}
-                  onMouseLeave={e => { if (!loading && otp.length === 6) (e.currentTarget.style.background = '#2563eb'); }}>
-                  {loading ? 'Verifying…' : 'Verify & sign in'}
-                </button>
-
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 16 }}>
-                  <button type="button" onClick={backToEmail}
+                <div style={{ display: 'flex', justifyContent: 'center', gap: 18 }}>
+                  <button type="button" onClick={() => switchTab('signup')}
                     style={{ background: 'none', border: 'none', fontSize: 13, color: '#64748b', cursor: 'pointer', padding: 0 }}>
                     ← Different email
                   </button>
-                  <button type="button" onClick={() => sendOtp()} disabled={cooldown > 0 || loading}
+                  <button type="button" onClick={resendSignupLink} disabled={cooldown > 0 || loading}
                     style={{ background: 'none', border: 'none', fontSize: 13, color: cooldown > 0 ? '#94a3b8' : '#2563eb', cursor: cooldown > 0 ? 'default' : 'pointer', padding: 0, fontWeight: 600 }}>
-                    {cooldown > 0 ? `Resend in ${cooldown}s` : 'Resend code'}
+                    {cooldown > 0 ? `Resend in ${cooldown}s` : 'Resend link'}
                   </button>
                 </div>
-              </form>
-            )}
-
-            {/* Step 3 — pending approval */}
-            {step === 'pending' && (
-              <div style={{ textAlign: 'center', padding: '8px 0' }}>
-                <div style={{ width: 64, height: 64, borderRadius: 18, background: '#fffbeb', border: '1px solid #fcd34d', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 18px' }}>
-                  <IClock />
-                </div>
-                <p style={{ fontSize: 17, fontWeight: 700, color: '#1e293b', marginBottom: 8 }}>Awaiting approval</p>
-                <p style={{ fontSize: 13.5, color: '#64748b', lineHeight: 1.6, marginBottom: 22 }}>
-                  Your email <strong style={{ color: '#1e293b' }}>{email}</strong> is verified.
-                  An administrator needs to approve your account and assign your role before you can enter the portal.
-                </p>
-                <button onClick={backToEmail}
-                  style={{ height: 42, padding: '0 22px', borderRadius: 10, background: '#ffffff', border: '1.5px solid #cbd5e1', color: '#334155', fontSize: 13.5, fontWeight: 600, cursor: 'pointer' }}>
-                  Back to sign in
-                </button>
               </div>
             )}
           </div>

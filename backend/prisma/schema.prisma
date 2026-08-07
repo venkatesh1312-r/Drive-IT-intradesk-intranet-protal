@@ -88,11 +88,18 @@ model User {
   // Nullable: new signups have no role until an admin assigns one.
   role            Role?
   status          UserStatus          @default(AWAITING_APPROVAL)
-  // ── OTP login ──
+  // ── OTP login (legacy, kept for backward compatibility; unused by password flow) ──
   otpHash         String?
   otpExpiresAt    DateTime?
   otpAttempts     Int                 @default(0)
   lastOtpSentAt   DateTime?
+  // ── Password login ──
+  passwordHash        String?
+  // Reused for both first-time "set password" (signup activation) links and
+  // "forgot password" links — same mechanism, same token lifecycle.
+  passwordTokenHash    String?
+  passwordTokenExpires DateTime?
+  lastPasswordEmailAt  DateTime?
   department      Department?
   designation     String?
   points          Int                 @default(0)

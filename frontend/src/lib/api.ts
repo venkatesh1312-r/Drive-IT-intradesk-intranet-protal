@@ -64,6 +64,11 @@ export const api = {
   // Auth & user
   requestOtp: (email: string) => request('/api/auth/request-otp', { method: 'POST', body: JSON.stringify({ email }) }),
   verifyOtp: (email: string, otp: string) => request('/api/auth/verify-otp', { method: 'POST', body: JSON.stringify({ email, otp }) }),
+  signup: (email: string) => request('/api/auth/signup', { method: 'POST', body: JSON.stringify({ email }) }),
+  login: (email: string, password: string) => request('/api/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
+  forgotPassword: (email: string) => request('/api/auth/forgot-password', { method: 'POST', body: JSON.stringify({ email }) }),
+  setPassword: (email: string, token: string, password: string) =>
+    request('/api/auth/set-password', { method: 'POST', body: JSON.stringify({ email, token, password }) }),
   getMe: () => request('/api/users/me'),
   getWallet: () => request('/api/users/wallet'),
   getLeaderboard: () => request('/api/users/leaderboard'),

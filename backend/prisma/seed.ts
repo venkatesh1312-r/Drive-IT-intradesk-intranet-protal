@@ -27,7 +27,7 @@ async function main() {
   const seeds = [
     { name: 'Hina Rao',      email: 'hina.r@driveittech.in',   role: Role.HR,       points: 0   },
     { name: 'Ishaan Tiwari', email: 'ishaan.t@driveittech.in', role: Role.IT,       points: 0   },
-    { name: 'Riya Sharma',   email: 'riya.s@driveittech.in',   role: Role.EMPLOYEE, points: 120 },
+    { name: 'Riya Sharma',   email: 'riya.s@driveittech.in',   role: Role.EMPLOYEE, points: 0   },
   ];
 
   const users: Record<string, { id: number }> = {};
