@@ -2,20 +2,25 @@ import {
   Injectable,
   UnauthorizedException,
   ForbiddenException,
+  BadRequestException,
   HttpException,
   HttpStatus,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../prisma.service';
-import { RequestOtpDto, VerifyOtpDto } from './auth.dto';
+import { RequestOtpDto, VerifyOtpDto, SignupDto, ForgotPasswordDto, SetPasswordDto, LoginDto } from './auth.dto';
 import { MailerService } from './mailer.service';
 import * as bcrypt from 'bcrypt';
-import { randomInt } from 'crypto';
+import { randomInt, randomBytes } from 'crypto';
 
 // ── OTP policy ──────────────────────────────────────────────────────
 const OTP_TTL_MINUTES = 5;
 const OTP_RESEND_COOLDOWN_S = 60;
 const OTP_MAX_ATTEMPTS = 5;
+
+// ── Password-link policy (signup activation + forgot password) ────────
+const PW_LINK_TTL_MINUTES = 30;
+const PW_LINK_RESEND_COOLDOWN_S = 60;
 
 /** "priya.s@driveittech.in" → "Priya S" — placeholder until admin/user edits it */
 function nameFromEmail(email: string) {
@@ -123,6 +128,119 @@ export class AuthService {
 
     const token = this.jwt.sign({ sub: user.id, email: user.email, role: user.role });
     const { otpHash, otpExpiresAt, otpAttempts, lastOtpSentAt, ...result } = user;
+    return { access_token: token, user: result };
+  }
+
+  // ─── Password auth: shared helper to issue + email a link ─────────
+  private async issuePasswordLink(user: { id: number; email: string; lastPasswordEmailAt: Date | null }, mode: 'activate' | 'reset') {
+    if (user.lastPasswordEmailAt) {
+      const elapsed = (Date.now() - user.lastPasswordEmailAt.getTime()) / 1000;
+      if (elapsed < PW_LINK_RESEND_COOLDOWN_S) {
+        const wait = Math.ceil(PW_LINK_RESEND_COOLDOWN_S - elapsed);
+        throw new HttpException(
+          { message: `Please wait ${wait}s before requesting another link.`, retryAfter: wait },
+          HttpStatus.TOO_MANY_REQUESTS,
+        );
+      }
+    }
+
+    const rawToken = randomBytes(32).toString('hex'); // 64-char URL-safe token
+    const tokenHash = await bcrypt.hash(rawToken, 10);
+
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: {
+        passwordTokenHash: tokenHash,
+        passwordTokenExpires: new Date(Date.now() + PW_LINK_TTL_MINUTES * 60_000),
+        lastPasswordEmailAt: new Date(),
+      },
+    });
+
+    const base = process.env.FRONTEND_URL || 'http://localhost:3000';
+    const link = `${base}/set-password?mode=${mode}&email=${encodeURIComponent(user.email)}&token=${rawToken}`;
+
+    this.mailer
+      .sendPasswordLink(user.email, link, PW_LINK_TTL_MINUTES, mode)
+      .catch((err) => console.error(`[password link mail] delivery to ${user.email} failed:`, err.message));
+  }
+
+  // ─── Sign up: email must already exist (pre-created by an admin with a
+  // role assigned). If it exists and has no password yet, email an
+  // activation link. Never reveals whether the email exists or not. ────
+  async signup(dto: SignupDto) {
+    const user = await this.prisma.user.findUnique({ where: { email: dto.email } });
+    const generic = { success: true, message: 'If an account exists for that email, a setup link has been sent.' };
+
+    if (!user) return generic;
+    if (user.status === 'REJECTED') return generic;
+    if (user.passwordHash) {
+      // Already activated — nudge them toward Sign In instead of re-issuing a link.
+      throw new BadRequestException('This account is already activated. Please sign in, or use "Forgot password" instead.');
+    }
+
+    await this.issuePasswordLink(user, 'activate');
+    return generic;
+  }
+
+  // ─── Forgot password: only works for accounts that already have a
+  // password set (i.e. already activated). If the email doesn't exist at
+  // all, we stay generic (don't leak which emails are registered) — but if
+  // it exists and simply hasn't been activated yet, we tell them plainly to
+  // use Sign Up instead, since that's a real UX dead-end otherwise.
+  async forgotPassword(dto: ForgotPasswordDto) {
+    const user = await this.prisma.user.findUnique({ where: { email: dto.email } });
+    const generic = { success: true, message: 'If an account exists for that email, a reset link has been sent.' };
+
+    if (!user || user.status === 'REJECTED') return generic;
+
+    if (!user.passwordHash) {
+      throw new BadRequestException('No password set for this account yet. Please use "Sign Up" to create your password first.');
+    }
+
+    await this.issuePasswordLink(user, 'reset');
+    return generic;
+  }
+
+  // ─── Set password: consumes the token from the emailed link, used for
+  // both first-time activation and forgot-password reset. ─────────────
+  async setPassword(dto: SetPasswordDto) {
+    const user = await this.prisma.user.findUnique({ where: { email: dto.email } });
+    const invalid = () => new UnauthorizedException('This link is invalid or has expired. Please request a new one.');
+
+    if (!user || !user.passwordTokenHash || !user.passwordTokenExpires) throw invalid();
+    if (user.passwordTokenExpires.getTime() < Date.now()) throw invalid();
+
+    const match = await bcrypt.compare(dto.token, user.passwordTokenHash);
+    if (!match) throw invalid();
+
+    const passwordHash = await bcrypt.hash(dto.password, 10);
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: { passwordHash, passwordTokenHash: null, passwordTokenExpires: null },
+    });
+
+    return { success: true, message: 'Password set successfully. You can now sign in.' };
+  }
+
+  // ─── Login: email + password ───────────────────────────────────────
+  async login(dto: LoginDto) {
+    const user = await this.prisma.user.findUnique({ where: { email: dto.email } });
+    const invalid = () => new UnauthorizedException('Incorrect email or password.');
+
+    if (!user || !user.passwordHash) throw invalid();
+    if (user.status === 'REJECTED') {
+      throw new ForbiddenException('Your access has been revoked. Please contact the administrator.');
+    }
+
+    const match = await bcrypt.compare(dto.password, user.passwordHash);
+    if (!match) throw invalid();
+
+    if (user.status !== 'ACTIVE' || !user.role) {
+      return { pending: true, status: user.status, user: { email: user.email, name: user.name } };
+    }
+
+    const token = this.jwt.sign({ sub: user.id, email: user.email, role: user.role });
+    const { otpHash, otpExpiresAt, otpAttempts, lastOtpSentAt, passwordHash, passwordTokenHash, passwordTokenExpires, ...result } = user;
     return { access_token: token, user: result };
   }
 }

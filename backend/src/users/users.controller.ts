@@ -1,6 +1,6 @@
 import {
-  Controller, Get, Patch, Body, Param, Query, UseGuards, Request,
-  BadRequestException, ForbiddenException, NotFoundException, ParseIntPipe,
+  Controller, Get, Post, Patch, Body, Param, Query, UseGuards, Request,
+  BadRequestException, ConflictException, ForbiddenException, NotFoundException, ParseIntPipe,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/roles.guard';
@@ -117,7 +117,35 @@ export class UsersController {
     });
   }
 
-  // ─── Admin: approval & role management ────────────────────────────
+  // Pre-create an account with a role already assigned. The person can then
+  // use "Sign Up" with this email to receive a password-setup link — there
+  // is no separate approval step in the password-auth flow.
+  @Post()
+  @Roles('ADMIN')
+  async createUser(@Body() body: { name?: string; email?: string; role?: string }) {
+    const email = (body.email || '').trim().toLowerCase();
+    const name = (body.name || '').trim();
+    const role = (body.role || '').toUpperCase();
+
+    const EMAIL_RULE = /^[a-z]+\.[a-z]@driveittech\.in$/;
+    if (!EMAIL_RULE.test(email)) {
+      throw new BadRequestException('Email must be in the format firstname.initial@driveittech.in');
+    }
+    if (!name) throw new BadRequestException('Name is required');
+    if (!ASSIGNABLE_ROLES.includes(role as any)) {
+      throw new BadRequestException(`role must be one of: ${ASSIGNABLE_ROLES.join(', ')}`);
+    }
+
+    const existing = await this.prisma.user.findUnique({ where: { email } });
+    if (existing) throw new ConflictException('A user with this email already exists');
+
+    return this.prisma.user.create({
+      data: { name, email, role: role as any, department: DEPT_FOR_ROLE[role], status: 'ACTIVE' },
+      select: { id: true, name: true, email: true, role: true, department: true, status: true, createdAt: true },
+    });
+  }
+
+  // ─── Admin: approval & role management (legacy OTP self-signup flow) ─
 
   @Get('pending')
   @Roles('ADMIN')

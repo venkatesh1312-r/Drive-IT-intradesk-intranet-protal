@@ -20,7 +20,11 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     if (user.status !== 'ACTIVE') throw new UnauthorizedException('Account is not active');
     // Never let credential material ride along on req.user (it would leak
     // through endpoints that spread the user object, e.g. GET /users/me).
-    const { otpHash, otpExpiresAt, otpAttempts, lastOtpSentAt, ...safe } = user;
+    const {
+      otpHash, otpExpiresAt, otpAttempts, lastOtpSentAt,
+      passwordHash, passwordTokenHash, passwordTokenExpires,
+      ...safe
+    } = user;
     return safe;
   }
 }
