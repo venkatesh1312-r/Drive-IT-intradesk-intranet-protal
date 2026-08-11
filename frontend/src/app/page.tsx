@@ -30,30 +30,81 @@ const IMail = () => (
     <rect x="2" y="4" width="20" height="16" rx="2" /><path d="M2 7l10 7 10-7" />
   </svg>
 );
+const IEye = () => (
+  <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+    <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z" /><circle cx="12" cy="12" r="3" />
+  </svg>
+);
+const IEyeOff = () => (
+  <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+    <path d="M17.94 17.94A10.94 10.94 0 0112 20c-7 0-11-7-11-7a20.3 20.3 0 015.06-5.94M9.9 4.24A10.4 10.4 0 0112 4c7 0 11 7 11 7a20.5 20.5 0 01-3.22 4.36M14.12 14.12a3 3 0 11-4.24-4.24" />
+    <line x1="1" y1="1" x2="23" y2="23" />
+  </svg>
+);
+
+/* Strong-password rule — must mirror backend STRONG_PASSWORD_RULE:
+   8-72 chars, 1+ uppercase, 1+ lowercase, 2+ numbers, 1+ special char. */
+function passwordRuleError(pw: string): string {
+  if (pw.length < 8 || pw.length > 72) return 'Password must be 8-72 characters long.';
+  if (!/[A-Z]/.test(pw)) return 'Password must include at least 1 uppercase letter.';
+  if (!/[a-z]/.test(pw)) return 'Password must include at least 1 lowercase letter.';
+  if ((pw.match(/\d/g) || []).length < 2) return 'Password must include at least 2 numbers.';
+  if (!/[^A-Za-z0-9]/.test(pw)) return 'Password must include at least 1 special character.';
+  return '';
+}
 
 type Tab = 'signin' | 'signup';
-type Step = 'form' | 'sent';
+type SignUpStep = 'email' | 'otp' | 'details' | 'done';
+
+const SIGNUP_OTP_TTL_S = 5 * 60; // must mirror backend SIGNUP_OTP_TTL_MINUTES
 
 export default function LoginPage() {
   const router = useRouter();
   const [tab, setTab]           = useState<Tab>('signin');
-  const [step, setStep]         = useState<Step>('form');
+  const [signUpStep, setSignUpStep] = useState<SignUpStep>('email');
   const [email, setEmail]       = useState('');
   const [password, setPassword] = useState('');
+  const [showLoginPassword, setShowLoginPassword] = useState(false);
   const [error, setError]       = useState('');
   const [info, setInfo]         = useState('');
   const [loading, setLoading]   = useState(false);
   const [cooldown, setCooldown] = useState(0);
 
-  /* Resend cooldown ticker */
+  /* Sign-up specific state */
+  const [otp, setOtp]                 = useState('');
+  const [otpExpiresIn, setOtpExpiresIn] = useState(0); // seconds left on the current code's 5-min life
+  const [name, setName]               = useState('');
+  const [signupRole, setSignupRole]   = useState('Employee'); // real role, from server after OTP verify
+  const [signupPassword, setSignupPassword]   = useState('');
+  const [showSignupPassword, setShowSignupPassword] = useState(false);
+  const [signupConfirm, setSignupConfirm]     = useState('');
+
+  /* Resend cooldown ticker (60s) */
   useEffect(() => {
     if (cooldown <= 0) return;
     const t = setInterval(() => setCooldown(c => (c > 0 ? c - 1 : 0)), 1000);
     return () => clearInterval(t);
   }, [cooldown > 0]);
 
+  /* OTP lifetime ticker (5 min) — once it hits 0 the code is dead and the
+     user must tap Resend to get a fresh one. */
+  useEffect(() => {
+    if (otpExpiresIn <= 0) return;
+    const t = setInterval(() => setOtpExpiresIn(s => (s > 0 ? s - 1 : 0)), 1000);
+    return () => clearInterval(t);
+  }, [otpExpiresIn > 0]);
+
+  function formatMMSS(total: number) {
+    const m = Math.floor(total / 60);
+    const s = total % 60;
+    return `${m}:${s.toString().padStart(2, '0')}`;
+  }
+
   function switchTab(next: Tab) {
-    setTab(next); setStep('form'); setEmail(''); setPassword(''); setError(''); setInfo('');
+    setTab(next); setSignUpStep('email'); setEmail(''); setPassword(''); setError(''); setInfo('');
+    setOtp(''); setOtpExpiresIn(0); setName(''); setSignupPassword(''); setSignupConfirm(''); setCooldown(0);
+    setSignupRole('Employee');
+    setShowLoginPassword(false); setShowSignupPassword(false);
   }
 
   async function submitSignIn(e?: React.FormEvent) {
@@ -89,7 +140,9 @@ export default function LoginPage() {
     }
   }
 
-  async function submitSignUp(e?: React.FormEvent) {
+  /* Step 1: submit + validate the company email, request an OTP.
+     Nothing beyond email + a placeholder name is stored in the DB yet. */
+  async function submitSignUpEmail(e?: React.FormEvent) {
     e?.preventDefault();
     const em = email.trim().toLowerCase();
     if (!EMAIL_RULE.test(em)) {
@@ -98,25 +151,74 @@ export default function LoginPage() {
     }
     setLoading(true); setError(''); setInfo('');
     try {
-      await api.signup(em);
+      const res = await api.signupRequestOtp(em);
       setEmail(em);
-      setCooldown(60);
-      setStep('sent');
+      setOtp('');
+      setCooldown(res.resendIn ?? 60);
+      setOtpExpiresIn(res.expiresIn ?? SIGNUP_OTP_TTL_S);
+      setSignUpStep('otp');
     } catch (err: any) {
-      setError(err.message || 'Could not send the setup link. Please try again.');
+      setError(err.message || 'Could not send the verification code. Please try again.');
     } finally {
       setLoading(false);
     }
   }
 
-  async function resendSignupLink() {
+  /* Step 2: verify the OTP. On success, move to the details form. */
+  async function submitSignUpOtp(e?: React.FormEvent) {
+    e?.preventDefault();
+    if (otpExpiresIn <= 0) {
+      setError('This code has expired. Please request a new one.');
+      return;
+    }
+    if (!/^\d{6}$/.test(otp)) {
+      setError('Enter the 6-digit code.');
+      return;
+    }
+    setLoading(true); setError('');
+    try {
+      const res = await api.signupVerifyOtp(email, otp);
+      const role = res.role || 'EMPLOYEE';
+      setSignupRole(role.charAt(0) + role.slice(1).toLowerCase()); // EMPLOYEE -> Employee
+      setSignUpStep('details');
+    } catch (err: any) {
+      setError(err.message || 'Invalid or expired code.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  /* Resend: re-runs step 1 for the same email — issues a fresh code with
+     a fresh 5-minute lifetime and resets the 60s resend cooldown. */
+  async function resendSignupOtp() {
     if (cooldown > 0 || loading) return;
     setLoading(true); setError('');
     try {
-      await api.signup(email);
-      setCooldown(60);
+      const res = await api.signupRequestOtp(email);
+      setOtp('');
+      setCooldown(res.resendIn ?? 60);
+      setOtpExpiresIn(res.expiresIn ?? SIGNUP_OTP_TTL_S);
     } catch (err: any) {
-      setError(err.message || 'Could not resend the link.');
+      setError(err.message || 'Could not resend the code.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  /* Step 3: collect name + (fixed) role + password, create the account. */
+  async function submitSignUpDetails(e?: React.FormEvent) {
+    e?.preventDefault();
+    if (!name.trim()) { setError('Enter your name.'); return; }
+    const pwErr = passwordRuleError(signupPassword);
+    if (pwErr) { setError(pwErr); return; }
+    if (signupPassword !== signupConfirm) { setError('Passwords do not match.'); return; }
+    setLoading(true); setError('');
+    try {
+      await api.signupComplete(email, name.trim(), signupPassword, signupConfirm);
+      setSignUpStep('done');
+      setTimeout(() => switchTab('signin'), 2000);
+    } catch (err: any) {
+      setError(err.message || 'Could not create your account. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -130,8 +232,8 @@ export default function LoginPage() {
     }
     setLoading(true); setError(''); setInfo('');
     try {
-      await api.forgotPassword(em);
-      setInfo('If an account exists for that email, a reset link has been sent.');
+      const res = await api.forgotPassword(em);
+      setInfo(res.message || 'A password reset link has been sent to your email.');
     } catch (err: any) {
       setError(err.message || 'Could not send the reset link.');
     } finally {
@@ -185,6 +287,8 @@ export default function LoginPage() {
         <Diamond style={{ bottom: '8%',  left: '20%', opacity: 0.5,  width: 13, height: 13 }} />
         <Diamond style={{ bottom: '6%',  right: '38%', opacity: 0.3, width: 8,  height: 8  }} />
         <Diamond style={{ bottom: '4%',  left: '4%',  opacity: 0.25, width: 10, height: 10 }} />
+
+        {/* GPTW badge moved to the white right container for the login page — see below */}
       </div>
 
       {/* ── Right panel ── */}
@@ -200,29 +304,42 @@ export default function LoginPage() {
         <Diamond style={{ top: '2%',  left: '62%',  opacity: 0.1,  width: 5,  height: 5,  background: '#bae6fd' }} />
         <Diamond style={{ top: '16%', right: '10%', opacity: 0.15, width: 11, height: 11, background: '#93c5fd' }} />
 
+        {/* GPTW badge — sign-in only, pinned to the bottom-right corner of the white container */}
+        {tab === 'signin' && (
+          <img src="/gptw.svg" alt="Great Place to Work Certified" style={{ position: 'absolute', bottom: 20, right: 20, width: 64, height: 'auto' }} />
+        )}
+
         {/* Inner layout */}
         <div style={{ flex: 1, display: 'flex', alignItems: 'center', padding: '60px 8% 60px 10%', gap: 64 }}>
 
           {/* Welcome text */}
-          <div style={{ flex: 1, paddingTop: 8 }}>
-            <h1 style={{ fontSize: 44, fontWeight: 800, color: '#0f172a', letterSpacing: '-0.02em', lineHeight: 1.15, marginBottom: 0 }}>
-              Welcome to the
-            </h1>
-            <h1 style={{
-              fontSize: 44, fontWeight: 800,
-              background: 'linear-gradient(90deg, #2563eb 0%, #7c3aed 100%)',
-              WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text',
-              letterSpacing: '-0.02em', lineHeight: 1.15, marginBottom: 36,
-            }}>
-              Intranet Portal
-            </h1>
+          <div style={{ flex: 1, paddingTop: 8, position: 'relative' }}>
             <div>
-              <p style={{ fontSize: 18, fontWeight: 700, color: '#1e293b', marginBottom: 4 }}>
-                {tab === 'signin' ? 'Hello Again!' : 'New here?'}
-              </p>
-              <p style={{ fontSize: 14, color: '#64748b', fontWeight: 400 }}>
-                {tab === 'signin' ? 'Sign in with your email and password' : 'Enter your email to get started'}
-              </p>
+              <h1 style={{ fontSize: 44, fontWeight: 800, color: '#0f172a', letterSpacing: '-0.02em', lineHeight: 1.15, marginBottom: 0 }}>
+                Welcome to the
+              </h1>
+              <h1 style={{
+                fontSize: 44, fontWeight: 800,
+                background: 'linear-gradient(90deg, #2563eb 0%, #7c3aed 100%)',
+                WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text',
+                letterSpacing: '-0.02em', lineHeight: 1.15, marginBottom: 36,
+              }}>
+                Intranet Portal
+              </h1>
+              <div>
+                <p style={{ fontSize: 18, fontWeight: 700, color: '#1e293b', marginBottom: 4 }}>
+                  {tab === 'signin' ? 'Hello Again!' : 'New here?'}
+                </p>
+                <p style={{ fontSize: 14, color: '#64748b', fontWeight: 400 }}>
+                  {tab === 'signin' ? 'Sign in with your email and password' : 'Enter your email to get started'}
+                </p>
+              </div>
+
+              {/* GPTW badge — sign-up only, small gap below the welcome content.
+                  Absolutely positioned so it doesn't shift the text block's vertical centering. */}
+              {tab === 'signup' && (
+                <img src="/gptw.svg" alt="Great Place to Work Certified" style={{ position: 'absolute', top: '100%', left: 0, marginTop: 16, width: 72, height: 'auto' }} />
+              )}
             </div>
           </div>
 
@@ -279,15 +396,35 @@ export default function LoginPage() {
                     <ILock />
                   </div>
                   <input
-                    type="password" value={password} onChange={e => setPassword(e.target.value)}
+                    type={showLoginPassword ? 'text' : 'password'} value={password} onChange={e => setPassword(e.target.value)}
                     placeholder="Enter your password" autoComplete="current-password"
-                    style={{ ...inputBase, paddingLeft: 42, paddingRight: 14 }}
+                    style={{ ...inputBase, paddingLeft: 42, paddingRight: 42 }}
                     onFocus={focus} onBlur={blur}
                   />
+                  {password.length > 0 && (
+                    <button type="button" onClick={() => setShowLoginPassword(v => !v)}
+                      aria-label={showLoginPassword ? 'Hide password' : 'Show password'}
+                      style={{ position: 'absolute', right: 14, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', padding: 0, display: 'flex' }}>
+                      {showLoginPassword ? <IEyeOff /> : <IEye />}
+                    </button>
+                  )}
                 </div>
 
                 {info && !error && <p style={{ fontSize: 13, color: '#16a34a', marginBottom: 14, textAlign: 'center' }}>{info}</p>}
-                {error && <p style={{ fontSize: 13, color: '#ef4444', marginBottom: 14, textAlign: 'center' }}>{error}</p>}
+                {error && (
+                  <p style={{ fontSize: 13, color: '#ef4444', marginBottom: 14, textAlign: 'center' }}>
+                    {error}
+                    {error.toLowerCase().includes('sign up') && (
+                      <>
+                        {' '}
+                        <button type="button" onClick={() => switchTab('signup')}
+                          style={{ background: 'none', border: 'none', fontSize: 13, color: '#2563eb', cursor: 'pointer', padding: 0, fontWeight: 700, textDecoration: 'underline' }}>
+                          Sign up now
+                        </button>
+                      </>
+                    )}
+                  </p>
+                )}
 
                 <button type="submit" disabled={loading}
                   style={{ width: '100%', height: 50, borderRadius: 12, background: loading ? '#93c5fd' : '#2563eb', border: 'none', color: '#ffffff', fontSize: 15, fontWeight: 700, cursor: loading ? 'not-allowed' : 'pointer', transition: 'background 150ms', letterSpacing: '0.01em' }}
@@ -298,9 +435,9 @@ export default function LoginPage() {
               </form>
             )}
 
-            {/* ── Sign Up: email only → activation link email ── */}
-            {tab === 'signup' && step === 'form' && (
-              <form onSubmit={submitSignUp}>
+            {/* ── Sign Up · Step 1: company email ── */}
+            {tab === 'signup' && signUpStep === 'email' && (
+              <form onSubmit={submitSignUpEmail}>
                 <div style={{ marginBottom: 14, position: 'relative' }}>
                   <div style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', color: '#64748b', pointerEvents: 'none' }}>
                     <IEmail />
@@ -313,7 +450,7 @@ export default function LoginPage() {
                   />
                 </div>
                 <p style={{ fontSize: 12, color: '#94a3b8', marginBottom: 18, lineHeight: 1.5 }}>
-                  We&apos;ll email you a link to set up your password.
+                  We&apos;ll verify this is a valid company email and send you a 6-digit code.
                 </p>
 
                 {error && <p style={{ fontSize: 13, color: '#ef4444', marginBottom: 14, textAlign: 'center' }}>{error}</p>}
@@ -322,41 +459,135 @@ export default function LoginPage() {
                   style={{ width: '100%', height: 50, borderRadius: 12, background: loading ? '#93c5fd' : '#2563eb', border: 'none', color: '#ffffff', fontSize: 15, fontWeight: 700, cursor: loading ? 'not-allowed' : 'pointer', transition: 'background 150ms', letterSpacing: '0.01em' }}
                   onMouseEnter={e => { if (!loading) (e.currentTarget.style.background = '#1d4ed8'); }}
                   onMouseLeave={e => { if (!loading) (e.currentTarget.style.background = '#2563eb'); }}>
-                  {loading ? 'Sending link…' : 'Send setup link'}
+                  {loading ? 'Sending code…' : 'Send verification code'}
                 </button>
               </form>
             )}
 
-            {/* ── Sign Up: link sent confirmation ── */}
-            {tab === 'signup' && step === 'sent' && (
-              <div style={{ textAlign: 'center', padding: '8px 0' }}>
+            {/* ── Sign Up · Step 2: enter OTP ── */}
+            {tab === 'signup' && signUpStep === 'otp' && (
+              <form onSubmit={submitSignUpOtp}>
                 <div style={{ width: 64, height: 64, borderRadius: 18, background: '#eff6ff', border: '1px solid #bfdbfe', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 18px' }}>
                   <IMail />
                 </div>
-                <p style={{ fontSize: 17, fontWeight: 700, color: '#1e293b', marginBottom: 8 }}>Check your email</p>
-                <p style={{ fontSize: 13.5, color: '#64748b', lineHeight: 1.6, marginBottom: 18 }}>
-                  If an account exists for <strong style={{ color: '#1e293b' }}>{email}</strong>, we&apos;ve sent a link to set up your password. The link expires in 30 minutes.
+                <p style={{ fontSize: 13.5, color: '#64748b', lineHeight: 1.6, marginBottom: 16, textAlign: 'center' }}>
+                  Enter the 6-digit code sent to <strong style={{ color: '#1e293b' }}>{email}</strong>
+                </p>
+
+                <div style={{ marginBottom: 8 }}>
+                  <input
+                    type="text" inputMode="numeric" value={otp}
+                    onChange={e => setOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                    placeholder="000000" maxLength={6} autoComplete="one-time-code"
+                    style={{ ...inputBase, padding: '0 14px', textAlign: 'center', letterSpacing: '6px', fontSize: 20, fontWeight: 700 }}
+                    onFocus={focus} onBlur={blur}
+                  />
+                </div>
+                <p style={{ fontSize: 12, color: otpExpiresIn > 0 ? '#94a3b8' : '#ef4444', marginBottom: 18, textAlign: 'center' }}>
+                  {otpExpiresIn > 0 ? `Code expires in ${formatMMSS(otpExpiresIn)}` : 'This code has expired — tap Resend below.'}
                 </p>
 
                 {error && <p style={{ fontSize: 13, color: '#ef4444', marginBottom: 14, textAlign: 'center' }}>{error}</p>}
+
+                <button type="submit" disabled={loading || otpExpiresIn <= 0}
+                  style={{ width: '100%', height: 50, borderRadius: 12, background: (loading || otpExpiresIn <= 0) ? '#93c5fd' : '#2563eb', border: 'none', color: '#ffffff', fontSize: 15, fontWeight: 700, cursor: (loading || otpExpiresIn <= 0) ? 'not-allowed' : 'pointer', transition: 'background 150ms', letterSpacing: '0.01em', marginBottom: 14 }}
+                  onMouseEnter={e => { if (!loading && otpExpiresIn > 0) (e.currentTarget.style.background = '#1d4ed8'); }}
+                  onMouseLeave={e => { if (!loading && otpExpiresIn > 0) (e.currentTarget.style.background = '#2563eb'); }}>
+                  {loading ? 'Verifying…' : 'Verify code'}
+                </button>
 
                 <div style={{ display: 'flex', justifyContent: 'center', gap: 18 }}>
                   <button type="button" onClick={() => switchTab('signup')}
                     style={{ background: 'none', border: 'none', fontSize: 13, color: '#64748b', cursor: 'pointer', padding: 0 }}>
                     ← Different email
                   </button>
-                  <button type="button" onClick={resendSignupLink} disabled={cooldown > 0 || loading}
+                  <button type="button" onClick={resendSignupOtp} disabled={cooldown > 0 || loading}
                     style={{ background: 'none', border: 'none', fontSize: 13, color: cooldown > 0 ? '#94a3b8' : '#2563eb', cursor: cooldown > 0 ? 'default' : 'pointer', padding: 0, fontWeight: 600 }}>
-                    {cooldown > 0 ? `Resend in ${cooldown}s` : 'Resend link'}
+                    {cooldown > 0 ? `Resend in ${cooldown}s` : 'Resend code'}
                   </button>
                 </div>
+              </form>
+            )}
+
+            {/* ── Sign Up · Step 3: name, role (fixed), password ── */}
+            {tab === 'signup' && signUpStep === 'details' && (
+              <form onSubmit={submitSignUpDetails}>
+                <div style={{ marginBottom: 14 }}>
+                  <label style={{ fontSize: 13, fontWeight: 700, color: '#1e293b', display: 'block', marginBottom: 6 }}>Name</label>
+                  <input
+                    type="text" value={name} onChange={e => setName(e.target.value)}
+                    placeholder="Your full name" autoComplete="name"
+                    style={{ ...inputBase, padding: '0 14px' }}
+                    onFocus={focus} onBlur={blur}
+                  />
+                </div>
+
+                <div style={{ marginBottom: 14 }}>
+                  <label style={{ fontSize: 13, fontWeight: 700, color: '#1e293b', display: 'block', marginBottom: 6 }}>Role</label>
+                  <input
+                    type="text" value={signupRole} disabled readOnly
+                    title="This is the role assigned to your account. It cannot be changed here."
+                    style={{ ...inputBase, padding: '0 14px', background: '#e2e8f0', color: '#64748b', cursor: 'not-allowed' }}
+                  />
+                  <p style={{ fontSize: 11.5, color: '#94a3b8', marginTop: 5 }}>
+                    {signupRole === 'Employee'
+                      ? 'New accounts start as Employee. An admin can change this later.'
+                      : 'This role was pre-assigned for this email.'}
+                  </p>
+                </div>
+
+                <div style={{ marginBottom: 6 }}>
+                  <label style={{ fontSize: 13, fontWeight: 700, color: '#1e293b', display: 'block', marginBottom: 6 }}>Password</label>
+                  <div style={{ position: 'relative' }}>
+                    <input
+                      type={showSignupPassword ? 'text' : 'password'} value={signupPassword} onChange={e => setSignupPassword(e.target.value)}
+                      placeholder="At least 8 characters" autoComplete="new-password"
+                      style={{ ...inputBase, padding: '0 42px 0 14px' }}
+                      onFocus={focus} onBlur={blur}
+                    />
+                    {signupPassword.length > 0 && (
+                      <button type="button" onClick={() => setShowSignupPassword(v => !v)}
+                        aria-label={showSignupPassword ? 'Hide password' : 'Show password'}
+                        style={{ position: 'absolute', right: 14, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', padding: 0, display: 'flex' }}>
+                        {showSignupPassword ? <IEyeOff /> : <IEye />}
+                      </button>
+                    )}
+                  </div>
+                </div>
+                <p style={{ fontSize: 11.5, color: '#94a3b8', marginBottom: 14, lineHeight: 1.5 }}>
+                  8–72 characters, with 1 uppercase, 1 lowercase, 2 numbers &amp; 1 special character.
+                </p>
+
+                <div style={{ marginBottom: 18 }}>
+                  <label style={{ fontSize: 13, fontWeight: 700, color: '#1e293b', display: 'block', marginBottom: 6 }}>Confirm password</label>
+                  <input
+                    type="text" value={signupConfirm} onChange={e => setSignupConfirm(e.target.value)}
+                    placeholder="Re-enter password" autoComplete="new-password"
+                    style={{ ...inputBase, padding: '0 14px' }}
+                    onFocus={focus} onBlur={blur}
+                  />
+                </div>
+
+                {error && <p style={{ fontSize: 13, color: '#ef4444', marginBottom: 14, textAlign: 'center' }}>{error}</p>}
+
+                <button type="submit" disabled={loading}
+                  style={{ width: '100%', height: 50, borderRadius: 12, background: loading ? '#93c5fd' : '#2563eb', border: 'none', color: '#ffffff', fontSize: 15, fontWeight: 700, cursor: loading ? 'not-allowed' : 'pointer', transition: 'background 150ms', letterSpacing: '0.01em' }}
+                  onMouseEnter={e => { if (!loading) (e.currentTarget.style.background = '#1d4ed8'); }}
+                  onMouseLeave={e => { if (!loading) (e.currentTarget.style.background = '#2563eb'); }}>
+                  {loading ? 'Creating account…' : 'Create account'}
+                </button>
+              </form>
+            )}
+
+            {/* ── Sign Up · Done ── */}
+            {tab === 'signup' && signUpStep === 'done' && (
+              <div style={{ textAlign: 'center', padding: '8px 0' }}>
+                <p style={{ fontSize: 17, fontWeight: 700, color: '#1e293b', marginBottom: 8 }}>Account created</p>
+                <p style={{ fontSize: 13.5, color: '#64748b', lineHeight: 1.6 }}>Redirecting you to sign in…</p>
               </div>
             )}
           </div>
         </div>
-
-        {/* GPTW badge */}
-        <img src="/gptw.svg" alt="Great Place to Work Certified" style={{ position: 'absolute', bottom: 24, right: 28, width: 72, height: 'auto' }} />
       </div>
     </div>
   );

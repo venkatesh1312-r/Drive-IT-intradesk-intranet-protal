@@ -11,6 +11,17 @@ const inputBase: React.CSSProperties = {
 const focus = (e: React.FocusEvent<HTMLInputElement>) => { e.target.style.borderColor = '#2563eb'; e.target.style.background = '#ffffff'; };
 const blur  = (e: React.FocusEvent<HTMLInputElement>) => { e.target.style.borderColor = '#94a3b8'; e.target.style.background = '#f8fafc'; };
 
+/* Strong-password rule — must mirror backend STRONG_PASSWORD_RULE:
+   8-72 chars, 1+ uppercase, 1+ lowercase, 2+ numbers, 1+ special char. */
+function passwordRuleError(pw: string): string {
+  if (pw.length < 8 || pw.length > 72) return 'Password must be 8-72 characters long.';
+  if (!/[A-Z]/.test(pw)) return 'Password must include at least 1 uppercase letter.';
+  if (!/[a-z]/.test(pw)) return 'Password must include at least 1 lowercase letter.';
+  if ((pw.match(/\d/g) || []).length < 2) return 'Password must include at least 2 numbers.';
+  if (!/[^A-Za-z0-9]/.test(pw)) return 'Password must include at least 1 special character.';
+  return '';
+}
+
 function SetPasswordForm() {
   const router = useRouter();
   const params = useSearchParams();
@@ -28,7 +39,8 @@ function SetPasswordForm() {
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (password.length < 8) { setError('Password must be at least 8 characters.'); return; }
+    const pwErr = passwordRuleError(password);
+    if (pwErr) { setError(pwErr); return; }
     if (password !== confirm) { setError('Passwords do not match.'); return; }
     setLoading(true); setError('');
     try {
@@ -81,6 +93,9 @@ function SetPasswordForm() {
                 style={{ ...inputBase, padding: '0 14px' }}
                 onFocus={focus} onBlur={blur}
               />
+              <p style={{ fontSize: 11.5, color: '#94a3b8', marginTop: 5, lineHeight: 1.5 }}>
+                8-72 characters, with 1 uppercase, 1 lowercase, 2 numbers &amp; 1 special character.
+              </p>
             </div>
 
             <div style={{ marginBottom: 18 }}>

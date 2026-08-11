@@ -93,6 +93,8 @@ model User {
   otpExpiresAt    DateTime?
   otpAttempts     Int                 @default(0)
   lastOtpSentAt   DateTime?
+  // ── Sign-up OTP (email verification gate before the details/password step) ──
+  otpVerified     Boolean             @default(false)
   // ── Password login ──
   passwordHash        String?
   // Reused for both first-time "set password" (signup activation) links and

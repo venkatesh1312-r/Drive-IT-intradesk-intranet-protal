@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+guardrails-ai
+langgraph
+langchain
+langchain-community
+httpx
+python-dotenv

@@ -15,15 +15,21 @@ const inputStyle: React.CSSProperties = {
 /* Small toggle switch */
 function Toggle({ on, onClick }: { on: boolean; onClick: () => void }) {
   return (
-    <button onClick={onClick} style={{ width: 40, height: 22, borderRadius: 20, border: 'none', cursor: 'pointer', background: on ? 'var(--accent)' : 'var(--text-faint)', position: 'relative', transition: 'background 0.15s', flexShrink: 0 }}>
-      <span style={{ position: 'absolute', top: 2, left: on ? 20 : 2, width: 18, height: 18, borderRadius: '50%', background: 'var(--surface)', transition: 'left 0.15s' }} />
+    <button onClick={onClick} style={{
+      width: 40, height: 22, borderRadius: 20, border: on ? 'none' : '1.5px solid var(--border)',
+      cursor: 'pointer', background: on ? 'var(--accent)' : 'var(--surface-2)',
+      position: 'relative', transition: 'background 0.15s, border-color 0.15s', flexShrink: 0,
+    }}>
+      <span style={{
+        position: 'absolute', top: 2, left: on ? 20 : 2, width: 18, height: 18, borderRadius: '50%',
+        background: '#ffffff', boxShadow: '0 1px 3px rgba(0,0,0,0.35)', transition: 'left 0.15s',
+      }} />
     </button>
   );
 }
 
 export function SettingsModule({ user, onUpdated }: { user: any; onUpdated?: (u: any) => void }) {
   const role = user?.role || 'EMPLOYEE';
-  const isHR = role === 'HR' || role === 'ADMIN';
   const isAdmin = role === 'ADMIN';
 
   // Sub-navigation, role-aware
@@ -31,22 +37,10 @@ export function SettingsModule({ user, onUpdated }: { user: any; onUpdated?: (u:
     { group: 'Account', items: [{ key: 'profile', label: 'Profile' }] },
     { group: 'Preferences', items: [{ key: 'notifications', label: 'Notifications' }] },
   ];
-  if (isHR) {
-    groups.push({
-      group: 'Organization', items: [
-        { key: 'departments', label: 'Departments', soon: true, desc: 'Create and manage departments and their support queues.' },
-        { key: 'recognition', label: 'Recognition Rules', soon: true, desc: 'Configure nomination categories, point limits and approval flow.' },
-        { key: 'onboarding', label: 'Onboarding', soon: true, desc: 'Set defaults for new employee accounts and welcome flows.' },
-      ],
-    });
-  }
   if (isAdmin) {
     groups.push({
-      group: 'System', items: [
-        { key: 'roles', label: 'Roles & Access', soon: true, desc: 'Manage user roles, permissions and access levels.' },
-        { key: 'integrations', label: 'Integrations', soon: true, desc: 'Connect email, SSO and third-party tools.' },
-        { key: 'audit', label: 'Audit Logs', soon: true, desc: 'Review a full history of system and ticket activity.' },
-        { key: 'billing', label: 'Billing', soon: true, desc: 'Manage your subscription, seats and invoices.' },
+      group: 'Organization', items: [
+        { key: 'documents', label: 'Add Documents', desc: 'Upload company policy documents for the AI assistant to reference.' },
       ],
     });
   }
@@ -84,6 +78,7 @@ export function SettingsModule({ user, onUpdated }: { user: any; onUpdated?: (u:
       <div>
         {active === 'profile' && <ProfileSection user={user} onUpdated={onUpdated} />}
         {active === 'notifications' && <NotificationsSection user={user} />}
+        {active === 'documents' && <PolicyUploadSection />}
         {activeItem?.soon && <ComingSoonSection label={activeItem.label} desc={activeItem.desc} />}
       </div>
     </div>
@@ -218,6 +213,116 @@ function NotificationsSection({ user }: { user: any }) {
             <Toggle on={prefs[it.key]} onClick={() => toggle(it.key)} />
           </div>
         ))}
+      </div>
+    </div>
+  );
+}
+
+/* ── Add Documents (policy PDF upload → chatbot-service /policy_upload) ── */
+function PolicyUploadSection() {
+  const [files, setFiles] = useState<File[]>([]);
+  const [status, setStatus] = useState<'idle' | 'uploading' | 'success' | 'error'>('idle');
+  const [errorMsg, setErrorMsg] = useState('');
+
+  function collectFiles(e: React.ChangeEvent<HTMLInputElement>) {
+    const picked = Array.from(e.target.files || []);
+    setFiles(prev => [...prev, ...picked]);
+    e.target.value = ''; // allow re-selecting the same file after removing it
+  }
+
+  function removeFile(index: number) {
+    setFiles(prev => prev.filter((_, i) => i !== index));
+  }
+
+  async function uploadFiles() {
+    if (files.length === 0) return;
+    setStatus('uploading'); setErrorMsg('');
+    try {
+      await api.uploadPolicyDocs(files);
+      setStatus('success');
+      setFiles([]);
+      setTimeout(() => setStatus('idle'), 2500);
+    } catch (e: any) {
+      setStatus('error');
+      setErrorMsg(e.message || 'Upload failed. Please try again.');
+      setFiles([]);
+      setTimeout(() => setStatus('idle'), 3500);
+    }
+  }
+
+  return (
+    <div>
+      <h2 style={{ fontSize: 18, fontWeight: 700, color: 'var(--text)' }}>Add Documents</h2>
+      <p style={{ fontSize: 13, color: 'var(--text-muted)', marginTop: 3, marginBottom: 18 }}>
+        Upload company policy PDFs so the AI assistant can reference them when answering questions.
+      </p>
+
+      <div style={{ ...card, padding: 20 }}>
+        {status === 'uploading' && (
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: 160, border: '2px solid var(--b-blue-bd)', borderRadius: 16, background: 'var(--b-blue-bg)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <div className="spinner" />
+              <div>
+                <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>Uploading your documents…</p>
+                <p style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>Please don't close or refresh this page</p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {status === 'success' && (
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: 160, border: '2px solid var(--b-green-bd)', borderRadius: 16, background: 'var(--b-green-bg)' }}>
+            <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--b-green-fg)' }}>✓ Successfully uploaded</p>
+            <p style={{ fontSize: 11.5, color: 'var(--text-faint)', marginTop: 4 }}>Your documents are now live and safely stored</p>
+          </div>
+        )}
+
+        {status === 'error' && (
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: 160, border: '2px solid var(--b-red-bd)', borderRadius: 16, background: 'var(--b-red-bg)' }}>
+            <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--b-red-fg)' }}>Upload failed</p>
+            <p style={{ fontSize: 11.5, color: 'var(--text-faint)', marginTop: 4 }}>{errorMsg || 'Please try again.'}</p>
+          </div>
+        )}
+
+        {status === 'idle' && (
+          <label style={{
+            display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+            height: 160, border: '2px dashed var(--border)', borderRadius: 16, cursor: 'pointer',
+            background: 'var(--surface-2)', textAlign: 'center', padding: '0 16px',
+          }}>
+            <span style={{ fontSize: 28, marginBottom: 6 }}>📄</span>
+            <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-soft)', marginBottom: 4 }}>
+              Click to upload or drag and drop
+            </p>
+            <p style={{ fontSize: 11, fontWeight: 700, color: 'var(--b-red-fg)', marginBottom: 2 }}>Max 10MB per file, PDF only</p>
+            <p style={{ fontSize: 11, fontWeight: 600, color: 'var(--accent)' }}>Up to 10 PDFs at a time</p>
+            <input type="file" accept=".pdf" multiple onChange={collectFiles} style={{ display: 'none' }} />
+          </label>
+        )}
+
+        {files.length > 0 && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 14 }}>
+            {files.map((file, i) => (
+              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--surface-2)', border: '1px solid var(--border)', color: 'var(--text-soft)', fontSize: 12.5, padding: '6px 10px', borderRadius: 8 }}>
+                <span style={{ maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{file.name}</span>
+                <button type="button" onClick={() => removeFile(i)} aria-label="Remove file"
+                  style={{ background: 'none', border: 'none', color: 'var(--text-faint)', fontWeight: 700, cursor: 'pointer', padding: 0 }}>✕</button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {status === 'idle' && (
+          <button onClick={uploadFiles} disabled={files.length === 0}
+            style={{
+              marginTop: 16, height: 40, padding: '0 18px', borderRadius: 8, border: 'none',
+              background: files.length === 0 ? 'var(--text-faint)' : 'var(--accent)',
+              color: '#ffffff', fontSize: 13, fontWeight: 700,
+              cursor: files.length === 0 ? 'not-allowed' : 'pointer',
+            }}>
+            + Upload Policy
+          </button>
+        )}
       </div>
     </div>
   );

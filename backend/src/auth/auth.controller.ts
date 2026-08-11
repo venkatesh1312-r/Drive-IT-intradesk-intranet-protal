@@ -1,6 +1,15 @@
 import { Controller, Post, Body } from '@nestjs/common';
 import { AuthService } from './auth.service';
-import { RequestOtpDto, VerifyOtpDto, SignupDto, ForgotPasswordDto, SetPasswordDto, LoginDto } from './auth.dto';
+import {
+  RequestOtpDto,
+  VerifyOtpDto,
+  SignupRequestOtpDto,
+  SignupVerifyOtpDto,
+  SignupCompleteDto,
+  ForgotPasswordDto,
+  SetPasswordDto,
+  LoginDto,
+} from './auth.dto';
 
 @Controller('api/auth')
 export class AuthController {
@@ -18,10 +27,20 @@ export class AuthController {
     return this.authService.verifyOtp(dto);
   }
 
-  // ── Password auth ──
-  @Post('signup')
-  signup(@Body() dto: SignupDto) {
-    return this.authService.signup(dto);
+  // ── Sign up (self-service, 3 steps: email OTP → verify → details+password) ──
+  @Post('signup/request-otp')
+  signupRequestOtp(@Body() dto: SignupRequestOtpDto) {
+    return this.authService.signupRequestOtp(dto);
+  }
+
+  @Post('signup/verify-otp')
+  signupVerifyOtp(@Body() dto: SignupVerifyOtpDto) {
+    return this.authService.signupVerifyOtp(dto);
+  }
+
+  @Post('signup/complete')
+  signupComplete(@Body() dto: SignupCompleteDto) {
+    return this.authService.signupComplete(dto);
   }
 
   @Post('login')

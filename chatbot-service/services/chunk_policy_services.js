@@ -1,16 +1,29 @@
+// import pool from '../config/db.js'
+
+// const chunk_policy_insertion=async(pd_id,chunk_index,chunk_text,embedding)=>{
+
+//     const embedding_str = `[${embedding.join(',')}]`;
+
+//     const result= await pool.query(
+//         'INSERT INTO "CHUNKED_POLICY_DOC"(pd_id,chunk_index,chunk_text,embedding) VALUES($1,$2,$3,$4) RETURNING*',
+//         [pd_id,chunk_index,chunk_text,embedding_str]
+//     );
+
+//     return result
+// }
+
+// export default chunk_policy_insertion
+
 import prisma from '../config/prisma.js'
 
-// Embedding is stored as JSON text (SQLite has no vector type). The JS cosine
-// search in vector_search_services.js parses it back into a number[].
 const chunk_policy_insertion = async (pd_id, chunk_index, chunk_text, embedding) => {
-  await prisma.chunkedPolicyDoc.create({
-    data: {
-      pd_id,
-      chunk_index,
-      chunk_text,
-      embedding: JSON.stringify(embedding),
-    },
-  })
+  const embedding_str = `[${embedding.join(',')}]`
+
+  await prisma.$executeRaw`
+    INSERT INTO "CHUNKED_POLICY_DOC" (pd_id, chunk_index, chunk_text, embedding)
+    VALUES (${pd_id}, ${chunk_index}, ${chunk_text}, ${embedding_str}::vector)
+  `
+
   return { success: true }
 }
 
