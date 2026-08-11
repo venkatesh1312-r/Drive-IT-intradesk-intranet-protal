@@ -1,158 +1,108 @@
-# InfraDesk — Reward & Nomination Module
+# InfraDesk — Unified Internal Portal
 
-> Part of **InfraDesk**, a unified self-hosted internal platform for DriveIT Technologies.  
-> This module is the **Reward System** — one of five planned modules in the portal.
+> A self-hosted internal platform for **DriveIT Technologies** consolidating HR and IT operations into a single authenticated portal.
 
 ---
 
 ## What is InfraDesk?
 
-InfraDesk is a company-wide internal portal that consolidates HR and IT operations into a single authenticated platform. The five planned modules are:
+InfraDesk brings multiple internal-ops modules under one login, one sidebar, and one role system (`EMPLOYEE`, `HR`, `ADMIN`, `IT`). Based on the current codebase, the platform now includes:
 
 | Module | Purpose | Status |
 |---|---|---|
-| **Reward System** | Peer recognition, nominations, points wallet | ✅ Active (this repo) |
-| Help Desk | Raise and track IT/HR support tickets | 🔜 Coming Soon |
-| Email ID Generation | Onboarding email provisioning | 🔜 Coming Soon |
-| Policy Chatbot | AI-powered HR policy Q&A | 🔜 Coming Soon |
-| Visitor Management | Gate visitor pre-registration & check-in | 🔜 Coming Soon |
-
-All modules share the same login, sidebar layout, and role system (`EMPLOYEE`, `HR`, `ADMIN`).
-
----
-
-## Reward Module — Overview
-
-The Reward System lets employees nominate peers for their contributions. Nominations go through a structured approval hierarchy based on the type of recognition, with points awarded to the nominee on approval.
-
-**Core entities:**
-- **User** — has a role, earns points
-- **Nomination** — submitted by any user, reviewed by HR or Admin
-- **Points** — awarded on approval, stored on the nominee's account
+| **Reward System** | Peer recognition, nominations, points wallet | ✅ Active |
+| **Helpdesk / Tickets** | Raise and track IT/HR support tickets | ✅ Active |
+| **Visitor Management** | Gate visitor pre-registration, walk-ins, check-in | ✅ Active |
+| **Policy Chatbot** | AI-powered HR policy Q&A (RAG over uploaded policy docs) | ✅ Active |
+| **Work Log** | Employee work-log entries + admin review | ✅ Active |
+| **Projects** | Project/team records used across modules | ✅ Active |
+| **Comments** | Threaded comments (tickets, nominations, etc.) | ✅ Active |
+| **Notifications** | In-app notification bell / feed | ✅ Active |
+| **Audit** | Action audit trail across modules | ✅ Active |
+| **User Admin / Settings** | User management, password/OTP flows, settings | ✅ Active |
 
 ---
 
-## Complete Workflow
-
-### 1. Login
-- User visits `localhost:3000`, enters `@driveit.in` email + password
-- Domain enforced client-side (instant) and server-side (DTO `@Matches` + service check)
-- On success: JWT stored in `localStorage`, routed by role
-  - `EMPLOYEE` → `/dashboard`
-  - `HR` / `ADMIN` → `/admin`
-
-### 2. Employee — Submit a Nomination
-- Goes to **Reward System** in sidebar
-- Clicks **+ Create Nomination**, fills modal form:
-  - Nominee name, Nominated by, Project/Team, Category, Context/Reason
-- Nomination saved to DB with status `PENDING`
-- Card appears in their dashboard with amber **Pending** badge
-
-### 3. HR — Review Queue
-- HR logs in, sees **Reward System** showing only their category nominations:
-  - **Team Player** and **Above & Beyond** (general recognition)
-- Per nomination, HR can:
-  - Enter points (1–10), check consent → **Approve** → status `APPROVED`, points credited
-  - **Decline** → status `DECLINED`
-  - **Escalate to Admin** → status `ESCALATED` (for complex/technical cases)
-
-### 4. Admin — Full Control
-- Admin sees **all nominations** including escalated ones
-- Escalated cards are highlighted (indigo border + "Escalated from HR" banner)
-- Admin can Approve or Decline any `PENDING` or `ESCALATED` nomination
-- Also sees the **Innovation**, **Client Impact**, and **Mentorship** nominations directly (high-expertise categories)
-
-### 5. Points & Wallet
-- On approval: system does a case-insensitive name lookup for the nominee
-  - If account found → points credited to their wallet immediately
-  - If no account → nomination still approved, points linked later (Zoho integration planned)
-- Employee sees their total points earned on the dashboard
-
-### 6. Employee — Track Status
-- Submitted nomination cards update automatically:
-  - `Pending` → amber (waiting for HR)
-  - `Under Review` → indigo (escalated, waiting for Admin)
-  - `Approved` → green + points badge
-  - `Declined` → red, nomination closed
-
----
-
-## Nomination Routing by Category
-
-| Category | Routes To | Who Acts |
-|---|---|---|
-| Team Player | HR Queue | HR approves / declines / escalates |
-| Above & Beyond | HR Queue | HR approves / declines / escalates |
-| Innovation | Admin Queue | Admin approves / declines directly |
-| Client Impact | Admin Queue | Admin approves / declines directly |
-| Mentorship | Admin Queue | Admin approves / declines directly |
-
----
-
-## Status Lifecycle
+## Repository Layout
 
 ```
-PENDING ──► APPROVED   (HR or Admin approved)
-        ──► DECLINED   (HR or Admin declined)
-        ──► ESCALATED  (HR forwarded to Admin)
-
-ESCALATED ──► APPROVED (Admin approved)
-          ──► DECLINED (Admin declined)
-```
-
----
-
-## Role Capabilities
-
-| Feature | EMPLOYEE | HR | ADMIN |
-|---|---|---|---|
-| Submit nomination | ✅ | ✅ | ✅ |
-| View own nominations | ✅ | ✅ | ✅ |
-| View points wallet | ✅ | ✅ | ✅ |
-| See HR-category nominations | ✗ | ✅ | ✅ |
-| See all nominations | ✗ | ✗ | ✅ |
-| Approve / Decline | ✗ | ✅ (HR cats) | ✅ (all) |
-| Escalate to Admin | ✗ | ✅ | ✅ |
-| View stats dashboard | ✗ | ✅ | ✅ |
-
----
-
-## Tech Stack
-
-| Layer | Technology |
-|---|---|
-| Frontend | Next.js 14, App Router, inline React styles |
-| Backend | NestJS 10 |
-| Database | PostgreSQL |
-| ORM | Prisma |
-| Auth | JWT (7-day) + bcrypt |
-
----
-
-## Project Structure
-
-```
-reward-nomination-module/
-├── backend/
+Drive-IT-intradesk-intranet-portal/
+├── backend/                       # NestJS API (core portal: auth, reward, tickets, visitors, etc.)
 │   ├── prisma/
-│   │   ├── schema.prisma        # Models: User, Nomination + enums
-│   │   └── seed.ts              # Dev seed: admin, hr, employee users
+│   │   ├── schema.prisma          # All core models + enums
+│   │   ├── migrations/            # initial_schema → add_password_auth → add_signup_otp_verified
+│   │   └── seed.ts                # Dev seed: admin, hr, employee users
+│   ├── scripts/
+│   │   └── smtp-doctor.js         # SMTP connectivity/debug helper
 │   └── src/
-│       ├── auth/                # Login, register, JWT strategy, guards
-│       ├── nominations/         # Full nomination CRUD, approve, decline, escalate
-│       ├── users/               # Wallet + profile
-│       └── main.ts              # CORS (origin: true, all headers), ValidationPipe
-└── frontend/
-    └── src/
-        ├── app/
-        │   ├── page.tsx         # Login page (split layout, GPTW badge)
-        │   ├── dashboard/       # Employee dashboard (overview + reward)
-        │   └── admin/           # HR + Admin dashboard (role-scoped reward view)
-        ├── components/
-        │   └── DriveITLogo.tsx  # Full logo + collapsed mark for sidebar
-        └── lib/
-            └── api.ts           # API client — all endpoints, 5s abort timeout
+│       ├── auth/                  # Login, register, password auth, OTP, JWT, guards, mailer
+│       ├── audit/                 # Audit trail service/module
+│       ├── comments/              # Create/edit comment DTOs + controller/service
+│       ├── nominations/           # Reward System: CRUD, approve, decline, escalate
+│       ├── notifications/         # Notification feed
+│       ├── projects/              # Project/team CRUD
+│       ├── tickets/               # Helpdesk tickets (create/update DTOs)
+│       ├── users/                 # Wallet + profile
+│       ├── visitors/              # Visitor pre-registration, walk-in, check-in, reschedule
+│       ├── work-log/              # Work log entries + admin views
+│       ├── app.module.ts
+│       ├── main.ts                # CORS, ValidationPipe
+│       └── prisma.service.ts
+│
+├── chatbot-service/                # Policy Chatbot (Node + Python microservice)
+│   ├── config/prisma.js
+│   ├── controllers/                # chat_controller, upload_controller
+│   ├── middleware/                 # auth, error handling
+│   ├── prisma/                     # Postgres + pgvector schema & migration
+│   ├── python-microservice/        # LangGraph + guardrails RAG service
+│   │   ├── .guardrails/hub_registry.json
+│   │   ├── guardrails_service.py
+│   │   ├── langgraph_service.py
+│   │   ├── main.py
+│   │   └── requirements.txt
+│   ├── routes/                     # chat_router, upload_router
+│   ├── services/                   # chunking, embedding, LLM, PDF, policy, vector search
+│   ├── uploads/                    # Uploaded policy source docs (e.g. Code of Conduct PDF)
+│   └── server.js
+│
+├── frontend/                       # Next.js 14 App Router UI
+│   ├── public/                     # Logo, GPTW badge
+│   └── src/
+│       ├── app/
+│       │   ├── page.tsx            # Login (split layout, GPTW badge)
+│       │   ├── set-password/       # First-login / OTP password set
+│       │   ├── dashboard/          # Employee dashboard
+│       │   ├── hr/                 # HR-scoped views
+│       │   ├── it/                 # IT-scoped views
+│       │   └── admin/              # Admin dashboard (all modules, role-scoped)
+│       ├── components/
+│       │   ├── AiChatbotModule.tsx / AskAiFab.tsx   # Policy Chatbot UI
+│       │   ├── DriveITLogo.tsx
+│       │   ├── NotificationBell.tsx
+│       │   ├── Pagination.tsx
+│       │   ├── SettingsModule.tsx
+│       │   ├── TimeSelect12.tsx
+│       │   ├── UserAdminModule.tsx
+│       │   ├── VisitorsModule.tsx
+│       │   ├── WorkLogModule.tsx / WorkLogAdminModule.tsx
+│       └── lib/api.ts              # API client (all endpoints, abort timeout)
+│
+├── .gitignore
+├── README.md
+└── start.ps1                        # Windows helper script to launch services
 ```
+
+---
+
+## Why the Structure Changed
+
+The original single-module README only documented the **Reward System**. The codebase has since grown into three independently runnable services:
+
+1. **`backend/`** — the core NestJS portal API: auth, reward/nominations, tickets, visitors, work-log, projects, comments, notifications, audit, users.
+2. **`chatbot-service/`** — a separate Node service + Python (LangGraph/guardrails) microservice powering the Policy Chatbot, with its own Prisma schema (Postgres + pgvector) and upload pipeline for policy PDFs.
+3. **`frontend/`** — one Next.js app whose sidebar now routes into all active modules (`dashboard`, `hr`, `it`, `admin`, plus embedded widgets like the chatbot FAB and notification bell), instead of just the Reward System views.
+
+This README reorganizes the documentation to match: each running service gets its own setup section below, and modules are described by what's actually implemented in `src/`, not just the original roadmap.
 
 ---
 
@@ -160,70 +110,65 @@ reward-nomination-module/
 
 ### Prerequisites
 - Node.js 18+
-- PostgreSQL (local, password: configured in `backend/.env`)
+- Python 3.10+ (for the chatbot microservice)
+- PostgreSQL with `pgvector` extension enabled (needed for the chatbot service)
 
-### Backend
+### 1. Backend (core portal API)
 ```bash
 cd backend
 npm install
-npx prisma db push        # sync schema to DB
-npm run db:seed           # seed dev users
-npm run start:dev         # http://localhost:3001 (watch mode)
+cp .env.example .env        # fill in DB URL, JWT secret, SMTP creds
+npx prisma migrate deploy   # applies initial_schema, add_password_auth, add_signup_otp_verified
+npm run db:seed             # seed dev users
+npm run start:dev           # http://localhost:3001
 ```
 
-### Frontend
+### 2. Chatbot Service (Policy Chatbot)
+```bash
+cd chatbot-service
+npm install
+cp .env.example .env
+npx prisma migrate deploy   # init_postgres_pgvector
+npm run start                # or: node server.js
+
+# Python microservice (RAG/guardrails)
+cd python-microservice
+python -m venv venv && source venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env
+python main.py
+```
+
+### 3. Frontend
 ```bash
 cd frontend
 npm install
-npm run dev               # http://localhost:3000
+cp .env.example .env        # point at backend + chatbot-service base URLs
+npm run dev                 # http://localhost:3000
 ```
+
+> On Windows, `start.ps1` at the repo root can be used to launch all three services together.
 
 ### Dev Login Credentials
 
-| Email | Password | Role |
+| Email | Role |
 |---|---|---|
-| admin@driveit.in | admin123 | ADMIN |
-| hr@driveit.in | hr123 | HR |
-| employee@driveit.in | employee123 | EMPLOYEE |
-
----
-
-## API Reference
-
-| Method | Endpoint | Role | Description |
-|---|---|---|---|
-| POST | `/api/auth/login` | Public | Login, returns JWT + user |
-| POST | `/api/auth/register` | Public | Register (must be @driveit.in) |
-| GET | `/api/users/me` | Any | Current user profile |
-| GET | `/api/users/wallet` | Any | Points balance |
-| POST | `/api/nominations` | Any | Submit a nomination |
-| GET | `/api/nominations/mine` | Any | Nominations I submitted |
-| GET | `/api/nominations/received` | Any | Approved nominations for me |
-| GET | `/api/nominations` | HR, ADMIN | All nominations (HR gets HR-cats only) |
-| GET | `/api/nominations/stats` | HR, ADMIN | `{total, pending, escalated, approved, declined}` |
-| PATCH | `/api/nominations/:id/approve` | HR, ADMIN | Approve + award points |
-| PATCH | `/api/nominations/:id/decline` | HR, ADMIN | Decline |
-| PATCH | `/api/nominations/:id/escalate` | HR, ADMIN | Forward to Admin |
+| admin@driveit.in | ADMIN |
 
 ---
 
 ## Security Notes
 
-- All routes (except login/register) require a valid JWT Bearer token
-- `@driveit.in` domain enforced at three levels: frontend check, DTO `@Matches`, service runtime check
-- Passwords hashed with bcrypt
-- CORS configured to allow all origins in dev (`origin: true`) — restrict to company domain in production
-- `backend/.env` contains DB password and JWT secret — never commit to git
+- All routes (except login/register/OTP) require a valid JWT Bearer token.
+- `@driveit.in` domain enforced at frontend, DTO, and service levels.
+- Passwords hashed with bcrypt; password-set flow supports OTP verification (`add_signup_otp_verified` migration).
+- CORS is permissive in dev — restrict to the company domain in production.
+- `.env` files in `backend/`, `chatbot-service/`, and `frontend/` all contain secrets — never commit them.
+- Uploaded policy documents in `chatbot-service/uploads/` may contain sensitive HR content — restrict access accordingly.
 
 ---
 
-## Roadmap
+## Notes for Contributors
 
-| Phase | Features | Status |
-|---|---|---|
-| 1 | Login, nominations, HR/Admin approval, escalation, points wallet | ✅ Done |
-| 2 | Points redemption store (vouchers, extra leave) | 🔜 Planned |
-| 3 | Leaderboard, analytics charts, Zoho directory integration | 🔜 Planned |
-| 4 | Helpdesk tickets, Policy Chatbot, Visitor Management, Email ID Gen | 🔜 Planned |
-#   D r i v e - I T - i n t r a d e s k - i n t r a n e t - p r o t a l  
- 
+- Keep this README's **Repository Layout** section in sync with `src/` — when a new module folder is added under `backend/src/`, `chatbot-service/`, or `frontend/src/components`, add a line here rather than letting the tree drift out of date.
+- Each service (`backend`, `chatbot-service`, `frontend`) is independently deployable; document any new inter-service API contract in this file's "Why the Structure Changed" section.

@@ -8,7 +8,16 @@ import {
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../prisma.service';
-import { RequestOtpDto, VerifyOtpDto, SignupDto, ForgotPasswordDto, SetPasswordDto, LoginDto } from './auth.dto';
+import {
+  RequestOtpDto,
+  VerifyOtpDto,
+  SignupRequestOtpDto,
+  SignupVerifyOtpDto,
+  SignupCompleteDto,
+  ForgotPasswordDto,
+  SetPasswordDto,
+  LoginDto,
+} from './auth.dto';
 import { MailerService } from './mailer.service';
 import * as bcrypt from 'bcrypt';
 import { randomInt, randomBytes } from 'crypto';
@@ -18,8 +27,16 @@ const OTP_TTL_MINUTES = 5;
 const OTP_RESEND_COOLDOWN_S = 60;
 const OTP_MAX_ATTEMPTS = 5;
 
+// ── Sign-up OTP policy (email verification step) ──────────────────
+// Each code is valid for 5 minutes. Once it expires, the user must
+// click "Resend" to get a new one — the same request-otp endpoint
+// generates a fresh code with a fresh 5-minute window.
+const SIGNUP_OTP_TTL_MINUTES = 5;
+const SIGNUP_OTP_RESEND_COOLDOWN_S = 60;
+const SIGNUP_OTP_MAX_ATTEMPTS = 5;
+
 // ── Password-link policy (signup activation + forgot password) ────────
-const PW_LINK_TTL_MINUTES = 30;
+const PW_LINK_TTL_MINUTES = 5;
 const PW_LINK_RESEND_COOLDOWN_S = 60;
 
 /** "priya.s@driveittech.in" → "Priya S" — placeholder until admin/user edits it */
@@ -164,41 +181,177 @@ export class AuthService {
       .catch((err) => console.error(`[password link mail] delivery to ${user.email} failed:`, err.message));
   }
 
-  // ─── Sign up: email must already exist (pre-created by an admin with a
-  // role assigned). If it exists and has no password yet, email an
-  // activation link. Never reveals whether the email exists or not. ────
-  async signup(dto: SignupDto) {
-    const user = await this.prisma.user.findUnique({ where: { email: dto.email } });
-    const generic = { success: true, message: 'If an account exists for that email, a setup link has been sent.' };
+  // ─── Sign up (step 1): domain-email verification ───────────────────
+  // Validates that the address is a well-formed, not-yet-registered
+  // @driveittech.in mail. No signup data (name/role/password) is stored
+  // at this stage — only a bare row (email + placeholder name) so the
+  // OTP has somewhere to live. If the account is already fully signed
+  // up (has a password), we tell the user to sign in instead.
+  async signupRequestOtp(dto: SignupRequestOtpDto) {
+    const email = dto.email; // already trimmed + lowercased + pattern-checked by the DTO
 
-    if (!user) return generic;
-    if (user.status === 'REJECTED') return generic;
-    if (user.passwordHash) {
-      // Already activated — nudge them toward Sign In instead of re-issuing a link.
-      throw new BadRequestException('This account is already activated. Please sign in, or use "Forgot password" instead.');
+    let user = await this.prisma.user.findUnique({ where: { email } });
+
+    if (user?.status === 'REJECTED') {
+      throw new ForbiddenException('This email is not eligible to sign up. Please contact the administrator.');
+    }
+    if (user?.passwordHash) {
+      throw new BadRequestException('An account already exists for this email. Please sign in instead.');
     }
 
-    await this.issuePasswordLink(user, 'activate');
-    return generic;
+    // Resend cooldown
+    if (user?.lastOtpSentAt) {
+      const elapsed = (Date.now() - user.lastOtpSentAt.getTime()) / 1000;
+      if (elapsed < SIGNUP_OTP_RESEND_COOLDOWN_S) {
+        const wait = Math.ceil(SIGNUP_OTP_RESEND_COOLDOWN_S - elapsed);
+        throw new HttpException(
+          { message: `Please wait ${wait}s before requesting a new code.`, retryAfter: wait },
+          HttpStatus.TOO_MANY_REQUESTS,
+        );
+      }
+    }
+
+    // First time we see this email → create the bare row now. Every other
+    // column (role, password, department, ...) stays null/default until
+    // step 3 completes.
+    if (!user) {
+      user = await this.prisma.user.create({
+        data: { email, name: nameFromEmail(email), status: 'AWAITING_APPROVAL' },
+      });
+    }
+
+    const otp = randomInt(0, 1_000_000).toString().padStart(6, '0');
+    const otpHash = await bcrypt.hash(otp, 10);
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: {
+        otpHash,
+        otpExpiresAt: new Date(Date.now() + SIGNUP_OTP_TTL_MINUTES * 60_000),
+        otpAttempts: 0,
+        lastOtpSentAt: new Date(),
+        otpVerified: false, // any earlier verification is invalidated by a fresh code
+      },
+    });
+
+    this.mailer
+      .sendOtp(email, otp, SIGNUP_OTP_TTL_MINUTES)
+      .catch((err) => console.error(`[Signup OTP mail] delivery to ${email} failed:`, err.message));
+
+    return {
+      success: true,
+      message: 'A verification code has been sent to your email.',
+      resendIn: SIGNUP_OTP_RESEND_COOLDOWN_S,
+      expiresIn: SIGNUP_OTP_TTL_MINUTES * 60,
+    };
   }
 
-  // ─── Forgot password: only works for accounts that already have a
-  // password set (i.e. already activated). If the email doesn't exist at
-  // all, we stay generic (don't leak which emails are registered) — but if
-  // it exists and simply hasn't been activated yet, we tell them plainly to
-  // use Sign Up instead, since that's a real UX dead-end otherwise.
+  // ─── Sign up (step 2): verify the OTP ───────────────────────────────
+  // On success, marks the row otpVerified = true so step 3 is allowed,
+  // and clears the OTP itself (single-use). Does NOT issue a session —
+  // the account has no password yet.
+  async signupVerifyOtp(dto: SignupVerifyOtpDto) {
+    const user = await this.prisma.user.findUnique({ where: { email: dto.email } });
+    const invalid = () => new UnauthorizedException('Invalid or expired code.');
+
+    if (!user || !user.otpHash || !user.otpExpiresAt) throw invalid();
+    if (user.status === 'REJECTED') {
+      throw new ForbiddenException('This email is not eligible to sign up. Please contact the administrator.');
+    }
+    if (user.passwordHash) {
+      throw new BadRequestException('An account already exists for this email. Please sign in instead.');
+    }
+    if (user.otpExpiresAt.getTime() < Date.now()) {
+      throw new UnauthorizedException('This code has expired. Please request a new one.');
+    }
+    if (user.otpAttempts >= SIGNUP_OTP_MAX_ATTEMPTS) {
+      throw new UnauthorizedException('Too many incorrect attempts. Please request a new code.');
+    }
+
+    const match = await bcrypt.compare(dto.otp, user.otpHash);
+    if (!match) {
+      const attempts = user.otpAttempts + 1;
+      await this.prisma.user.update({ where: { id: user.id }, data: { otpAttempts: attempts } });
+      if (attempts >= SIGNUP_OTP_MAX_ATTEMPTS) {
+        throw new UnauthorizedException('Too many incorrect attempts. Please request a new code.');
+      }
+      throw new UnauthorizedException(`Incorrect code. ${SIGNUP_OTP_MAX_ATTEMPTS - attempts} attempt(s) left.`);
+    }
+
+    // Success — OTP is single-use; flip the verified gate for step 3.
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: { otpHash: null, otpExpiresAt: null, otpAttempts: 0, otpVerified: true },
+    });
+
+    // Let the frontend show the real role (e.g. a pre-seeded ADMIN slot)
+    // instead of assuming EMPLOYEE for everyone.
+    return {
+      success: true,
+      verified: true,
+      message: 'Email verified. You can now set up your account.',
+      role: user.role || 'EMPLOYEE',
+    };
+  }
+
+  // ─── Sign up (step 3): collect details + password ───────────────────
+  // Only reachable once step 2 set otpVerified = true for this email.
+  // Role defaults to EMPLOYEE for brand-new signups. If the row already
+  // had a role pre-set (e.g. the seeded ADMIN bootstrap slot), that role
+  // is preserved instead of being overwritten — the client can never
+  // supply a role either way, since SignupCompleteDto doesn't accept one.
+  async signupComplete(dto: SignupCompleteDto) {
+    const user = await this.prisma.user.findUnique({ where: { email: dto.email } });
+
+    if (!user) {
+      throw new BadRequestException('Please verify your email before continuing.');
+    }
+    if (user.status === 'REJECTED') {
+      throw new ForbiddenException('This email is not eligible to sign up. Please contact the administrator.');
+    }
+    if (user.passwordHash) {
+      throw new BadRequestException('An account already exists for this email. Please sign in instead.');
+    }
+    if (!user.otpVerified) {
+      throw new UnauthorizedException('Please verify your email with the OTP before continuing.');
+    }
+    if (dto.password !== dto.confirmPassword) {
+      throw new BadRequestException('Passwords do not match.');
+    }
+
+    const passwordHash = await bcrypt.hash(dto.password, 10);
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: {
+        name: dto.name.trim(),
+        role: user.role ?? 'EMPLOYEE', // preserve a pre-set role (e.g. seeded ADMIN); default EMPLOYEE for brand-new rows
+        passwordHash,
+        status: 'ACTIVE',
+        otpVerified: false,
+      },
+    });
+
+    return { success: true, message: 'Account created successfully. You can now sign in.' };
+  }
+
+  // ─── Forgot password: explicitly checks whether the email exists.
+  // - Not in DB at all → tell them to sign up.
+  // - Exists but no password yet (mid-signup / never completed) → tell them to sign up.
+  // - Exists and activated → send the reset link.
   async forgotPassword(dto: ForgotPasswordDto) {
     const user = await this.prisma.user.findUnique({ where: { email: dto.email } });
-    const generic = { success: true, message: 'If an account exists for that email, a reset link has been sent.' };
 
-    if (!user || user.status === 'REJECTED') return generic;
-
+    if (!user) {
+      throw new BadRequestException('No account found for this email. Please sign up first.');
+    }
+    if (user.status === 'REJECTED') {
+      throw new ForbiddenException('This account is not eligible to reset a password. Please contact the administrator.');
+    }
     if (!user.passwordHash) {
-      throw new BadRequestException('No password set for this account yet. Please use "Sign Up" to create your password first.');
+      throw new BadRequestException('No account found for this email. Please sign up first.');
     }
 
     await this.issuePasswordLink(user, 'reset');
-    return generic;
+    return { success: true, message: 'A password reset link has been sent to your email.' };
   }
 
   // ─── Set password: consumes the token from the emailed link, used for

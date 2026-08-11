@@ -23,6 +23,21 @@ async function chatbotRequest(path: string, options: RequestInit = {}) {
   return data;
 }
 
+// Multipart upload — deliberately does NOT set Content-Type so the browser
+// can attach its own multipart boundary; forcing application/json here
+// would break multer's parsing on the chatbot-service side.
+async function chatbotUpload(path: string, formData: FormData) {
+  const token = getToken();
+  const res = await fetch(`${CHATBOT_BASE}${path}`, {
+    method: 'POST',
+    headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    body: formData,
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || data.message || 'Upload failed');
+  return data;
+}
+
 async function request(path: string, options: RequestInit = {}) {
   const token = getToken();
   const controller = new AbortController();
@@ -60,11 +75,25 @@ export const api = {
   getChatSessions: () => chatbotRequest('/askbot/sessions'),
   getChatSession: (id: string) => chatbotRequest(`/askbot/sessions/${id}`),
   deleteChatSession: (id: string) => chatbotRequest(`/askbot/sessions/${id}`, { method: 'DELETE' }),
+  uploadPolicyDocs: (files: File[]) => {
+    const formData = new FormData();
+    files.forEach(f => formData.append('pdf', f));
+    return chatbotUpload('/policy_upload', formData);
+  },
 
   // Auth & user
   requestOtp: (email: string) => request('/api/auth/request-otp', { method: 'POST', body: JSON.stringify({ email }) }),
   verifyOtp: (email: string, otp: string) => request('/api/auth/verify-otp', { method: 'POST', body: JSON.stringify({ email, otp }) }),
-  signup: (email: string) => request('/api/auth/signup', { method: 'POST', body: JSON.stringify({ email }) }),
+  // Sign up (3 steps)
+  signupRequestOtp: (email: string) =>
+    request('/api/auth/signup/request-otp', { method: 'POST', body: JSON.stringify({ email }) }),
+  signupVerifyOtp: (email: string, otp: string) =>
+    request('/api/auth/signup/verify-otp', { method: 'POST', body: JSON.stringify({ email, otp }) }),
+  signupComplete: (email: string, name: string, password: string, confirmPassword: string) =>
+    request('/api/auth/signup/complete', {
+      method: 'POST',
+      body: JSON.stringify({ email, name, password, confirmPassword }),
+    }),
   login: (email: string, password: string) => request('/api/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
   forgotPassword: (email: string) => request('/api/auth/forgot-password', { method: 'POST', body: JSON.stringify({ email }) }),
   setPassword: (email: string, token: string, password: string) =>

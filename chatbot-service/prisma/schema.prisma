@@ -1,9 +1,8 @@
 // ─────────────────────────────────────────────────────────────
-// Self-contained SQLite schema for the sidecar chatbot service.
-// No pgvector: embeddings are stored as JSON text and cosine
-// similarity is computed in JS (vector_search_services.js).
-// emp_id is just an int taken from the login JWT (`sub`) — this
-// service does not own the user table.
+// Chatbot sidecar — PostgreSQL + pgvector.
+// This service does NOT own the User table (emp_id is just the
+// plain int `sub` claim from the NestJS login JWT). It only owns
+// its own policy/chat data, matching infradesk's chatbot schema.
 // ─────────────────────────────────────────────────────────────
 
 generator client {
@@ -11,7 +10,7 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
@@ -19,39 +18,45 @@ model PolicyDoc {
   pd_id     Int                @id @default(autoincrement())
   file_name String?
   full_text String?
-  uploadat  DateTime           @default(now())
+  uploadat  DateTime?          @default(now()) @db.Timestamp(6)
   chunks    ChunkedPolicyDoc[]
+
+  @@map("POLICY_DOC")
 }
 
 model ChunkedPolicyDoc {
-  cpd_id      Int        @id @default(autoincrement())
+  cpd_id      Int                    @id @default(autoincrement())
   pd_id       Int?
   chunk_index Int?
   chunk_text  String?
-  // JSON-encoded number[] (the 768-dim embedding). SQLite has no vector type.
-  embedding   String?
-  policy      PolicyDoc? @relation(fields: [pd_id], references: [pd_id], onDelete: Cascade)
+  // pgvector column — 768 dims (nomic-embed-text). Managed via raw SQL
+  // in the migration since Prisma can't natively type "vector".
+  embedding   Unsupported("vector")?
+  policy      PolicyDoc?             @relation(fields: [pd_id], references: [pd_id], onDelete: Cascade)
 
-  @@index([pd_id])
+  @@index([embedding], map: "chunked_policy_embedding_idx")
+  @@map("CHUNKED_POLICY_DOC")
 }
 
 model ChatSession {
-  id         String   @id
+  id         String    @id
   title      String
-  // JSON-encoded array of { role, text } (SQLite has no Json scalar).
-  messages   String   @default("[]")
-  created_at DateTime @default(now())
-  updated_at DateTime @default(now())
+  messages   Json      @default("[]")
+  created_at DateTime? @default(now()) @db.Timestamptz(6)
+  updated_at DateTime? @default(now()) @db.Timestamptz(6)
   emp_id     Int?
 
-  @@index([emp_id])
-  @@index([updated_at])
+  @@index([emp_id], map: "idx_chat_sessions_emp_id")
+  @@index([updated_at(sort: Desc)], map: "idx_chat_sessions_updated")
+  @@map("chat_sessions")
 }
 
 model QuestionLog {
-  id         Int      @id @default(autoincrement())
+  id         Int       @id @default(autoincrement())
   question   String
-  topic      String?  @default("OTHER")
-  session_id String?
-  asked_at   DateTime @default(now())
+  topic      String?   @default("OTHER") @db.VarChar(50)
+  session_id String?   @db.VarChar(255)
+  asked_at   DateTime? @default(now()) @db.Timestamp(6)
+
+  @@map("question_logs")
 }

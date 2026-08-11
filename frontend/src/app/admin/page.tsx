@@ -1032,6 +1032,13 @@ export default function AdminPage() {
       return next;
     });
   }
+  // Also mirror the theme onto <html> so body's own background (var(--bg)
+  // only resolves dark inside this component's div) doesn't show through
+  // as a lighter sliver at the page edges/during scroll bounce.
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+    return () => { document.documentElement.removeAttribute('data-theme'); };
+  }, [theme]);
 
   useEffect(() => {
     const stored = localStorage.getItem('user');

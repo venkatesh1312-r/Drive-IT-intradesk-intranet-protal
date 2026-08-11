@@ -1,85 +1,80 @@
+// import pool from '../config/db.js'
+// import generate_embedding from './embedding_services.js'
+
+// // ✅ Reusing the existing pool from db.js — no need to create a new one
+
+// const vector_search = async (data) => {
+
+//   console.time('1. embedding')
+//   const embedding = await generate_embedding(data)
+//   console.timeEnd('1. embedding')
+
+//   const embedding_str = `[${embedding.join(',')}]`
+
+//   console.time('2. pgvector search')
+//   const client = await pool.connect()
+
+//   try {
+//     await client.query('SET hnsw.ef_search = 20')
+
+//     const result = await client.query(
+//       `SELECT chunk_text, embedding <=> $1 AS distance
+//        FROM "CHUNKED_POLICY_DOC"
+//        ORDER BY distance
+//        LIMIT 5`,
+//       [embedding_str]
+//     )
+
+//     // ✅ Only return chunks that are actually relevant
+//     const relevant = result.rows.filter(row => row.distance < 0.6)
+
+//     console.timeEnd('2. pgvector search')
+//     return relevant
+
+//   } finally {
+//     client.release()
+//   }
+// }
+
+// export default vector_search
+
+
+// server/services/vector_search_services.js
 // ─────────────────────────────────────────────────────────────
-// In-memory cosine similarity search (no pgvector required).
-//
-// Embeddings are stored as JSON text in ChunkedPolicyDoc.embedding.
-// Parsing that JSON for every chunk on every request is the slow part,
-// so we parse once and keep the float vectors in memory. The cache is
-// invalidated automatically when the number of stored chunks changes
-// (e.g. an admin uploads / removes a policy doc), which is a single
-// cheap COUNT query instead of re-reading + re-parsing every row.
-//
-// Retrieval is intentionally a little generous: we return more chunks
-// and use a looser relevance cutoff so the LLM has enough related
-// material to reason across and link sections together, instead of
-// only exact matches.
+// Uses prisma.$queryRaw — embedding column is Unsupported("vector")
+// in schema.prisma (confirmed via prisma db pull). Same SQL logic
+// as your original pool-based version. Zero impact on bot speed/quality.
 // ─────────────────────────────────────────────────────────────
 import prisma from '../config/prisma.js'
 import generate_embedding from './embedding_services.js'
 
-// Looser than the old 0.6 so semantically-related sections are included
-// and the model can link them. Overridable via env for tuning.
-const DISTANCE_CUTOFF = Number(process.env.RAG_DISTANCE_CUTOFF) || 0.72
-const DEFAULT_LIMIT = Number(process.env.RAG_TOP_K) || 6
-
-// Parsed-vector cache (module lifetime).
-let vectorCache = null // [{ chunk_text, vec }]
-let cachedCount = -1
-
-function cosineSimilarity(a, b) {
-  let dot = 0
-  let normA = 0
-  let normB = 0
-  const len = Math.min(a.length, b.length)
-  for (let i = 0; i < len; i++) {
-    dot += a[i] * b[i]
-    normA += a[i] * a[i]
-    normB += b[i] * b[i]
-  }
-  if (normA === 0 || normB === 0) return 0
-  return dot / (Math.sqrt(normA) * Math.sqrt(normB))
-}
-
-async function loadVectors() {
-  const count = await prisma.chunkedPolicyDoc.count({ where: { embedding: { not: null } } })
-  if (vectorCache && count === cachedCount) return vectorCache
-
-  console.time('vector cache rebuild')
-  const rows = await prisma.chunkedPolicyDoc.findMany({
-    where: { embedding: { not: null } },
-    select: { chunk_text: true, embedding: true },
-  })
-
-  const parsed = []
-  for (const row of rows) {
-    try {
-      parsed.push({ chunk_text: row.chunk_text, vec: JSON.parse(row.embedding) })
-    } catch {
-      /* skip malformed embedding */
-    }
-  }
-  vectorCache = parsed
-  cachedCount = count
-  console.timeEnd('vector cache rebuild')
-  return vectorCache
-}
-
-const vector_search = async (data, limit = DEFAULT_LIMIT) => {
+const vector_search = async (data) => {
   console.time('1. embedding')
-  const queryEmbedding = await generate_embedding(data)
+  const embedding = await generate_embedding(data)
   console.timeEnd('1. embedding')
 
-  console.time('2. cosine search')
-  const vectors = await loadVectors()
+  const embedding_str = `[${embedding.join(',')}]`
 
-  const scored = vectors.map((row) => ({
-    chunk_text: row.chunk_text,
-    distance: 1 - cosineSimilarity(queryEmbedding, row.vec),
-  }))
+  console.time('2. pgvector search')
 
-  scored.sort((a, b) => a.distance - b.distance)
-  const relevant = scored.filter((r) => r.distance < DISTANCE_CUTOFF).slice(0, limit)
-  console.timeEnd('2. cosine search')
-  return relevant
+  try {
+    await prisma.$executeRaw`SET hnsw.ef_search = 20`
+
+    const rows = await prisma.$queryRaw`
+      SELECT chunk_text, embedding <=> ${embedding_str}::vector AS distance
+      FROM "CHUNKED_POLICY_DOC"
+      ORDER BY distance
+      LIMIT 5
+    `
+
+    const relevant = rows.filter(row => row.distance < 0.6)
+    console.timeEnd('2. pgvector search')
+    return relevant
+
+  } catch (err) {
+    console.timeEnd('2. pgvector search')
+    throw err
+  }
 }
 
 export default vector_search
