@@ -17,5 +17,6 @@
     "forceConsistentCasingInFileNames": false,
     "noFallthroughCasesInSwitch": false,
     "rootDir": "./src"
-  }
+  },
+  "exclude": ["node_modules", "dist", "prisma"]
 }
