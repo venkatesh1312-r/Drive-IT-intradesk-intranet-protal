@@ -1,4 +1,5 @@
 import { PrismaClient, Role, UserStatus } from '@prisma/client';
+import * as bcrypt from 'bcrypt';
 
 const prisma = new PrismaClient();
 
@@ -27,25 +28,30 @@ async function main() {
 
   // Mirror the same placeholder-name convention signup step 1 uses
   // ("priya.s@driveittech.in" -> "Priya S") since `name` is a required
-  // field — it gets overwritten with the real name at signup completion.
+  // field — it can be updated later from the profile/settings screen.
   const local = adminEmail.split('@')[0];
   const placeholderName = local.split('.').map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join(' ');
 
+  // This admin slot skips the OTP signup flow entirely — it's seeded as an
+  // already-ACTIVE account with a default password so it can log in right
+  // away. The default password should be changed after first login.
+  const defaultPassword = process.env.BOOTSTRAP_ADMIN_PASSWORD || 'Admin@123';
+  const passwordHash = await bcrypt.hash(defaultPassword, 10);
+
   await prisma.user.upsert({
     where: { email: adminEmail },
-    update: {}, // don't touch it if it already exists (e.g. already signed up)
+    update: {}, // don't touch it if it already exists (e.g. password already changed)
     create: {
       email: adminEmail,
       role: Role.ADMIN,
-      status: UserStatus.AWAITING_APPROVAL,
-      // name is a placeholder, same as any fresh row from signup step 1 —
-      // passwordHash etc. all stay null until signup is completed.
+      status: UserStatus.ACTIVE,
       name: placeholderName,
+      passwordHash,
     },
   });
 
-  console.log(`Bootstrap admin slot ready: ${adminEmail} [role: ADMIN, awaiting signup]`);
-  console.log('Go to Sign Up with this email to verify via OTP and set your name + password.');
+  console.log(`Bootstrap admin ready: ${adminEmail} [role: ADMIN, status: ACTIVE]`);
+  console.log(`Default password: ${defaultPassword} — please log in and change it immediately.`);
 }
 
 main()
