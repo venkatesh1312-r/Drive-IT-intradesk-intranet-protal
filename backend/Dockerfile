@@ -3,6 +3,8 @@ FROM node:20-alpine AS builder
 
 WORKDIR /app
 
+RUN apk add --no-cache openssl
+
 COPY package*.json ./
 RUN npm install
 
@@ -18,6 +20,8 @@ RUN npm run build
 FROM node:20-alpine
 
 WORKDIR /app
+
+RUN apk add --no-cache openssl
 
 # Only copy what's needed to run, not dev deps/source
 COPY --from=builder /app/package*.json ./

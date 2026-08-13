@@ -1,6 +1,7 @@
 fastapi
 uvicorn
 guardrails-ai
+guardrails-grhub-toxic-language
 langgraph
 langchain
 langchain-community
