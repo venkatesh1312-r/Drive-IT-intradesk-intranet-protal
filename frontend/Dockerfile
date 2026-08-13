@@ -9,9 +9,12 @@ RUN npm install
 COPY . .
 
 # NEXT_PUBLIC_* vars must be present at BUILD time (baked into the JS bundle),
-# not just at runtime. Pass it in with --build-arg when building the image.
-ARG NEXT_PUBLIC_API_URL
+# not just at runtime. Default to this server's addresses; override with
+# --build-arg if deploying elsewhere.
+ARG NEXT_PUBLIC_API_URL=http://192.168.1.116:3001
+ARG NEXT_PUBLIC_CHATBOT_URL=http://192.168.1.116:4000
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+ENV NEXT_PUBLIC_CHATBOT_URL=$NEXT_PUBLIC_CHATBOT_URL
 
 RUN npm run build
 
