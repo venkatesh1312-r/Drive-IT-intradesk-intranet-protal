@@ -27,5 +27,8 @@ COPY --from=builder /app/prisma ./prisma
 
 EXPOSE 3001
 
-# Runs "npx prisma migrate deploy && node dist/main" (from package.json start script)
-CMD ["npm", "run", "start"]
+COPY docker-entrypoint.sh ./docker-entrypoint.sh
+RUN chmod +x ./docker-entrypoint.sh
+
+# Runs migrations (auto-baselines pre-existing schema if needed), then starts the app
+CMD ["./docker-entrypoint.sh"]

@@ -32,5 +32,8 @@ RUN mkdir -p uploads
 
 EXPOSE 4000
 
-# Runs "npx prisma migrate deploy && node server.js" (from package.json start script)
-CMD ["npm", "run", "start"]
+COPY docker-entrypoint.sh ./docker-entrypoint.sh
+RUN chmod +x ./docker-entrypoint.sh
+
+# Runs migrations (auto-baselines pre-existing schema if needed), then starts the app
+CMD ["./docker-entrypoint.sh"]
