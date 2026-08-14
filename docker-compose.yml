@@ -97,6 +97,7 @@ services:
       - ollama-init
     volumes:
       - chatbot_data:/app/prisma
+      - chatbot_uploads:/app/uploads
     networks:
       - infradesk-net
 
@@ -104,6 +105,7 @@ volumes:
   postgres_data:
   ollama_data:
   chatbot_data:
+  chatbot_uploads:
 
 networks:
   infradesk-net:
