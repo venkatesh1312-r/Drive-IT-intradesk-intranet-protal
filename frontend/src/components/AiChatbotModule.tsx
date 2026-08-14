@@ -2,6 +2,20 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { api, CHATBOT_BASE, getToken } from '@/lib/api';
 
+// crypto.randomUUID() only exists in secure contexts (https:// or localhost).
+// Over plain http:// on a LAN IP it's undefined even though `crypto` itself
+// exists, so we check the method directly and fall back to a manual UUIDv4.
+function safeRandomUUID(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+
 /* ── Static content ──────────────────────────────────────────────────── */
 const QUICK_QUESTIONS = [
   'Can I get a warning for misconduct?',
@@ -50,7 +64,7 @@ export function AiChatbotModule({ user }: { user: any }) {
   const [sessionsLoading, setSessionsLoading] = useState(true);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const session_id = useRef<string>(typeof crypto !== 'undefined' ? crypto.randomUUID() : String(Date.now()));
+  const session_id = useRef<string>(safeRandomUUID());
 
   useEffect(() => { fetchSessions(); }, []);
 
@@ -73,7 +87,7 @@ export function AiChatbotModule({ user }: { user: any }) {
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, loading]);
 
   const startNewChat = useCallback(() => {
-    session_id.current = typeof crypto !== 'undefined' ? crypto.randomUUID() : String(Date.now());
+    session_id.current = safeRandomUUID();
     setMessages([]);
     setUserInp('');
   }, []);
