@@ -31,7 +31,8 @@ const TOPICS = [
 async function classifyQuestion(question) {
   try {
     const result = await groq.chat.completions.create({
-      model: 'llama-3.1-8b-instant',
+      model: 'openai/gpt-oss-20b',
+      reasoning_effort: 'low',
       messages: [
         {
           role: 'system',
@@ -50,7 +51,7 @@ async function classifyQuestion(question) {
         { role: 'user', content: question }
       ],
       temperature: 0,
-      max_tokens: 20,
+      max_tokens: 100,
     })
     const raw    = result.choices[0]?.message?.content?.trim() || ''
     debugLog(`[Classifier] raw="${raw}"`)
@@ -68,7 +69,8 @@ async function isPreviousRelevant(currentQuestion, lastUserMsg, lastBotAnswer) {
   if (!lastBotAnswer || !lastUserMsg) return false
   try {
     const result = await groq.chat.completions.create({
-      model: 'llama-3.1-8b-instant',
+      model: 'openai/gpt-oss-20b',
+      reasoning_effort: 'low',
       messages: [
         {
           role: 'system',
@@ -87,7 +89,7 @@ async function isPreviousRelevant(currentQuestion, lastUserMsg, lastBotAnswer) {
         }
       ],
       temperature: 0,
-      max_tokens: 3,
+      max_tokens: 20,
     })
     const raw = result.choices[0]?.message?.content?.trim().toUpperCase() || ''
     debugLog(`[PrevRelevance] "${raw}"`)

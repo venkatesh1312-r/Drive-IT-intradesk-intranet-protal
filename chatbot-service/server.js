@@ -3,7 +3,7 @@ import 'dotenv/config'
 import express from 'express'
 import cors from 'cors'
 import cookieParser from 'cookie-parser'
-import ollama from 'ollama'
+import {Ollama} from 'ollama'
 
 import chat_router from './routes/chat_router.js'
 import policy_upload_router from './routes/upload_router.js'
@@ -11,6 +11,7 @@ import { errorHandler } from './middleware/error_middleware.js'
 
 const app = express()
 const PORT = process.env.PORT || 4000
+const ollama = new Ollama({ host: process.env.OLLAMA_HOST || 'http://127.0.0.1:11434' })
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:3000'
 const EMBED_MODEL = process.env.OLLAMA_EMBED_MODEL || 'nomic-embed-text'
 

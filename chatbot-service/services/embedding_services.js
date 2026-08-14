@@ -1,6 +1,7 @@
-import ollama from 'ollama'
+import {Ollama} from 'ollama'
 
 const cache = new Map()
+const ollama = new Ollama({ host: process.env.OLLAMA_HOST || 'http://127.0.0.1:11434' })
 
 const generate_embedding = async (data) => {
   const key = data.trim().toLowerCase()

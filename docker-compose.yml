@@ -1,0 +1,109 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: infradesk-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: infradesk
+      POSTGRES_PASSWORD: infradesk@123
+      POSTGRES_DB: infradesk
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - infradesk-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U infradesk"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: infradesk-backend
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    env_file:
+      - ./backend/.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - infradesk-net
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:3001
+        NEXT_PUBLIC_CHATBOT_URL: http://localhost:4000
+    container_name: infradesk-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    env_file:
+      - ./frontend/.env
+    depends_on:
+      - backend
+    networks:
+      - infradesk-net
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: infradesk-ollama
+    restart: unless-stopped
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - infradesk-net
+  
+  ollama-init:
+    container_name: infradesk-ollama-init
+    image: ollama/ollama:latest
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    depends_on:
+      ollama:
+        condition: service_started
+        required: true
+    entrypoint:
+      - sh
+      - -c
+      - >
+        until ollama list > /dev/null 2>&1; do sleep 2; done;
+        ollama pull nomic-embed-text;
+        ollama pull llama3.2;
+        echo Models pulled.
+    networks:
+      infradesk-net: null
+
+  chatbot:
+    build:
+      context: ./chatbot-service
+      dockerfile: Dockerfile
+    container_name: infradesk-chatbot
+    restart: unless-stopped
+    ports:
+      - "4000:4000"
+    env_file:
+      - ./chatbot-service/.env
+    depends_on:
+      - backend
+      - ollama
+      - ollama-init
+    volumes:
+      - chatbot_data:/app/prisma
+    networks:
+      - infradesk-net
+
+volumes:
+  postgres_data:
+  ollama_data:
+  chatbot_data:
+
+networks:
+  infradesk-net:
+    driver: bridge

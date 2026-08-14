@@ -10,7 +10,7 @@
     "sourceMap": true,
     "outDir": "./dist",
     "incremental": true,
-    "skipLibCheck": true,
+    "skipLibCheck": true, 
     "strictNullChecks": false,
     "noImplicitAny": false,
     "strictBindCallApply": false,

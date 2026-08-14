@@ -18,5 +18,8 @@ else
   npx prisma migrate deploy
 fi
 
+echo "Running database seed (safe to re-run - skips existing rows)..."
+npx prisma db seed || echo "Seed step failed or was skipped - continuing anyway."
+
 echo "Starting application..."
 exec node dist/main
