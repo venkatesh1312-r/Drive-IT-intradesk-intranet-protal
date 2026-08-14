@@ -9,10 +9,11 @@ services:
       POSTGRES_DB: infradesk
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./postgres/initdb:/docker-entrypoint-initdb.d
     networks:
       - infradesk-net
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U infradesk"]
+      test: ["CMD-SHELL", "pg_isready -U infradesk -d infradesk"]
       interval: 10s
       timeout: 5s
       retries: 5
