@@ -1,7 +1,13 @@
-const BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+// Empty or unset NEXT_PUBLIC_API_URL both mean "use relative paths" — i.e.
+// same-origin requests through the Nginx reverse proxy (fetch('/api/...')).
+// Next.js does NOT inline an env var into the client bundle when it's set to
+// an empty string at build time, so `process.env.NEXT_PUBLIC_API_URL` stays
+// undefined in the browser even though Docker Compose passed "". `||` treats
+// both undefined and "" as "not set", so this covers both cases correctly.
+const BASE = process.env.NEXT_PUBLIC_API_URL || '';
 
 // Sidecar AI chatbot service (Express + Ollama). Runs separately from the NestJS API.
-export const CHATBOT_BASE = process.env.NEXT_PUBLIC_CHATBOT_URL || 'http://localhost:4000';
+export const CHATBOT_BASE = process.env.NEXT_PUBLIC_CHATBOT_URL || '';
 
 export function getToken() {
   if (typeof window === 'undefined') return null;
