@@ -15,11 +15,15 @@ datasource db {
 }
 
 model PolicyDoc {
-  pd_id     Int                @id @default(autoincrement())
-  file_name String?
-  full_text String?
-  uploadat  DateTime?          @default(now()) @db.Timestamp(6)
-  chunks    ChunkedPolicyDoc[]
+  pd_id        Int                @id @default(autoincrement())
+  file_name    String?
+  full_text    String?
+  uploadat     DateTime?          @default(now()) @db.Timestamp(6)
+  // Shared id for every file uploaded together in one request (see upload_pdf).
+  // Lets "Recent Uploads" show the whole batch — 5 files or 10 — instead of a
+  // fixed row count. Legacy rows from before this column existed are null.
+  upload_batch String?            @db.VarChar(36)
+  chunks       ChunkedPolicyDoc[]
 
   @@map("POLICY_DOC")
 }

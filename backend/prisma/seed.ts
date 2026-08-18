@@ -33,7 +33,7 @@ async function main() {
   const placeholderName = local.split('.').map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join(' ');
 
   // This admin slot skips the OTP signup flow entirely — it's seeded as an
-  // already-ACTIVE account with a default password so it can log in right
+  // already-ACTIVE account with a default password so itdocker compose up -d frontend can log in right
   // away. The default password should be changed after first login.
   const defaultPassword = process.env.BOOTSTRAP_ADMIN_PASSWORD || 'Admin@123';
   const passwordHash = await bcrypt.hash(defaultPassword, 10);

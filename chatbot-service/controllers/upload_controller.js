@@ -1,3 +1,4 @@
+import crypto from 'crypto'
 import policy_insertion from '../services/policy_services.js'
 import chunk_policy_insertion from '../services/chunk_policy_services.js'
 import generate_embedding from '../services/embedding_services.js'
@@ -11,12 +12,17 @@ export const upload_pdf = async (req, res) => {
       return res.status(400).json({ success: false, error: 'No PDF files uploaded' })
     }
 
+    // One id shared by every file in this request, so "Recent Uploads" can
+    // later show the whole batch (5 files, 10 files, however many) instead
+    // of a fixed row count.
+    const upload_batch = crypto.randomUUID()
+
     for (const file of files) {
       const file_path = file.path
       const file_name = file.filename
 
       const full_text = await extract_pdf_text(file_path)
-      const pd_id = await policy_insertion(file_name, full_text)
+      const pd_id = await policy_insertion(file_name, full_text, upload_batch)
       const chunks = await text_to_chunks(full_text)
 
       const embeddingPromises = chunks.map((chunk, i) =>

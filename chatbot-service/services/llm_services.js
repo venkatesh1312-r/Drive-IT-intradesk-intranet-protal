@@ -65,8 +65,16 @@ export const askLLM = async (context, question, history = [], res, appendNote = 
   }
 
   // ── Step 2: Guardrails — injection + toxic only (non-greetings only) ─────
+  // Fails OPEN: if the guardrails microservice is down/unreachable, we log
+  // it and let the question through rather than breaking the whole chatbot
+  // over an optional safety-net service being unavailable.
   const t1 = Date.now()
-  const inputCheck = await validateInput(question)
+  let inputCheck = { valid: true }
+  try {
+    inputCheck = await validateInput(question)
+  } catch (err) {
+    console.error('[Input Guard Error] Guardrails unreachable, failing open:', err.message)
+  }
   timerLog(`[TIMER] validateInput: ${Date.now() - t1}ms`)
 
   if (!inputCheck.valid) {

@@ -44,6 +44,23 @@ async function chatbotUpload(path: string, formData: FormData) {
   return data;
 }
 
+// Fetches a binary response (PDF) from the chatbot service with the auth
+// header attached, and returns it as an object URL the browser can open —
+// used for the "View" action on uploaded policy documents.
+async function chatbotDownload(path: string) {
+  const token = getToken();
+  const res = await fetch(`${CHATBOT_BASE}${path}`, {
+    headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+  });
+  if (!res.ok) {
+    let message = 'Failed to load document';
+    try { message = (await res.json()).error || message; } catch {}
+    throw new Error(message);
+  }
+  const blob = await res.blob();
+  return URL.createObjectURL(blob);
+}
+
 async function request(path: string, options: RequestInit = {}) {
   const token = getToken();
   const controller = new AbortController();
@@ -86,6 +103,12 @@ export const api = {
     files.forEach(f => formData.append('pdf', f));
     return chatbotUpload('/policy_upload', formData);
   },
+  // No fixed count here — the backend returns the whole most-recent upload
+  // batch (5 files, 10 files, etc). `limit` is only a safety ceiling.
+  getRecentPolicyDocs: (limit = 50) => chatbotRequest(`/policy_upload/recent?limit=${limit}`),
+  getPolicyDocs: () => chatbotRequest('/policy_upload/documents'),
+  viewPolicyDoc: (id: number) => chatbotDownload(`/policy_upload/${id}/view`),
+  deletePolicyDoc: (id: number) => chatbotRequest(`/policy_upload/${id}`, { method: 'DELETE' }),
 
   // Auth & user
   requestOtp: (email: string) => request('/api/auth/request-otp', { method: 'POST', body: JSON.stringify({ email }) }),

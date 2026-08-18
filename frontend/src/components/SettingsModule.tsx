@@ -40,7 +40,7 @@ export function SettingsModule({ user, onUpdated }: { user: any; onUpdated?: (u:
   if (isAdmin) {
     groups.push({
       group: 'Organization', items: [
-        { key: 'documents', label: 'Add Documents', desc: 'Upload company policy documents for the AI assistant to reference.' },
+        { key: 'documents', label: 'Documents', desc: 'Upload and manage company policy documents for the AI assistant to reference.' },
       ],
     });
   }
@@ -78,7 +78,7 @@ export function SettingsModule({ user, onUpdated }: { user: any; onUpdated?: (u:
       <div>
         {active === 'profile' && <ProfileSection user={user} onUpdated={onUpdated} />}
         {active === 'notifications' && <NotificationsSection user={user} />}
-        {active === 'documents' && <PolicyUploadSection />}
+        {active === 'documents' && <DocumentsSection />}
         {activeItem?.soon && <ComingSoonSection label={activeItem.label} desc={activeItem.desc} />}
       </div>
     </div>
@@ -218,8 +218,399 @@ function NotificationsSection({ user }: { user: any }) {
   );
 }
 
+/* ── Documents (sub-nav "Documents") ──
+   Tabbed layout: Recent | All Files | Upload New. A shared refreshKey
+   re-fetches lists whenever a file finishes uploading or is deleted. */
+function DocumentsSection() {
+  const [tab, setTab] = useState<'recent' | 'all' | 'upload'>('recent');
+  const [refreshKey, setRefreshKey] = useState(0);
+  const bump = () => setRefreshKey(k => k + 1);
+
+  const tabs: { key: typeof tab; label: string }[] = [
+    { key: 'recent', label: 'Recent' },
+    { key: 'all', label: 'All Files' },
+    { key: 'upload', label: 'Upload New' },
+  ];
+
+  return (
+    <div>
+      <h2 style={{ fontSize: 18, fontWeight: 700, color: 'var(--text)' }}>Documents</h2>
+      <p style={{ fontSize: 13, color: 'var(--text-muted)', marginTop: 3, marginBottom: 18 }}>
+        Upload and manage company policy documents for the AI assistant to reference.
+      </p>
+
+      {/* Tab bar */}
+      <div style={{ display: 'flex', gap: 4, borderBottom: '1px solid var(--border)', marginBottom: 20 }}>
+        {tabs.map(t => {
+          const on = tab === t.key;
+          return (
+            <button key={t.key} onClick={() => setTab(t.key)} style={{
+              padding: '10px 4px', marginRight: 20, border: 'none', background: 'none', cursor: 'pointer',
+              fontSize: 14, fontWeight: on ? 700 : 500, color: on ? 'var(--text)' : 'var(--text-faint)',
+              borderBottom: on ? '2px solid var(--accent)' : '2px solid transparent', marginBottom: -1,
+            }}>
+              {t.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {tab === 'recent' && <RecentFilesTab refreshKey={refreshKey} />}
+      {tab === 'all' && <AllFilesTab refreshKey={refreshKey} onChanged={bump} />}
+      {tab === 'upload' && <PolicyUploadSection onUploaded={() => { bump(); setTab('recent'); }} />}
+    </div>
+  );
+}
+
+function formatDateTime(value: string) {
+  try {
+    const d = new Date(value);
+    return d.toLocaleString(undefined, {
+      day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit',
+    });
+  } catch { return value; }
+}
+
+type PolicyDocRow = { pd_id: number; file_name: string | null; uploadat: string | null };
+
+/* Simple inline "document with folded corner" icon, colored per file type.
+   Replaces the old book emoji with something that actually reads as a file/PDF icon. */
+function FileTypeIcon({ fg, label, size = 30 }: { fg: string; label: string; size?: number }) {
+  const w = size, h = size * 1.2;
+  return (
+    <svg width={w} height={h} viewBox="0 0 30 36" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M4 2h15l7 7v25a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2Z" fill={fg} fillOpacity={0.14} stroke={fg} strokeWidth={1.6} strokeLinejoin="round" />
+      <path d="M19 2v6a1 1 0 0 0 1 1h6" fill="none" stroke={fg} strokeWidth={1.6} strokeLinejoin="round" />
+      <text x="15" y="27" textAnchor="middle" fontSize="8.5" fontWeight="800" fontFamily="inherit" fill={fg}>{label}</text>
+    </svg>
+  );
+}
+
+/* Visual style (icon + color) derived from the file extension. Only PDFs
+   exist today, but this stays generic in case other types are added later. */
+function fileVisual(name?: string | null) {
+  const ext = (name || '').split('.').pop()?.toLowerCase() || '';
+  if (ext === 'pdf') return { bg: '#fef2f2', fg: '#dc2626', label: 'PDF' };
+  if (ext === 'doc' || ext === 'docx') return { bg: '#eff6ff', fg: '#2563eb', label: 'DOC' };
+  if (['png', 'jpg', 'jpeg', 'gif', 'webp'].includes(ext)) return { bg: '#fdf4ff', fg: '#a21caf', label: 'IMG' };
+  return { bg: 'var(--surface-2)', fg: 'var(--text-faint)', label: ext.toUpperCase() || 'FILE' };
+}
+
+/* Kebab (3-dot) menu — click to reveal Delete.
+   Open/close state lives in the parent (one shared `openId`) so opening one
+   menu always closes any other menu that's open, and a single window-level
+   click listener (registered by the parent) closes it on an outside click. */
+function KebabMenu({ open, onToggle, onDelete }: { open: boolean; onToggle: () => void; onDelete: () => void }) {
+  return (
+    <div style={{ position: 'relative', flexShrink: 0 }} onClick={e => e.stopPropagation()}>
+      <button onClick={onToggle} aria-label="More options" style={{
+        width: 28, height: 28, borderRadius: 7, border: 'none', background: open ? 'var(--surface-2)' : 'none',
+        color: 'var(--text-faint)', cursor: 'pointer', fontSize: 16, fontWeight: 700, lineHeight: '28px',
+      }}>⋮</button>
+      {open && (
+        <div style={{
+          position: 'absolute', top: 32, right: 0, zIndex: 20, minWidth: 120,
+          background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8,
+          boxShadow: '0 4px 16px rgba(0,0,0,0.12)', padding: 4,
+        }}>
+          <button onClick={onDelete} style={{
+            width: '100%', textAlign: 'left', padding: '7px 10px', borderRadius: 6, border: 'none',
+            background: 'none', color: '#dc2626', fontSize: 12.5, fontWeight: 600, cursor: 'pointer',
+          }}>
+            🗑 Delete
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* Inline "delete this document?" confirm strip, shared by grid + list. */
+function DeleteConfirm({ busy, onConfirm, onCancel }: { busy: boolean; onConfirm: () => void; onCancel: () => void }) {
+  const iconBtn: React.CSSProperties = {
+    height: 26, padding: '0 9px', borderRadius: 6, fontSize: 11.5, fontWeight: 600,
+    cursor: 'pointer', border: '1px solid var(--border)', background: 'var(--surface-2)', color: 'var(--text-soft)',
+  };
+  return (
+    <div onClick={e => e.stopPropagation()} style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+      <span style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>Delete?</span>
+      <button style={{ ...iconBtn, background: '#dc2626', border: 'none', color: '#fff' }} disabled={busy} onClick={onConfirm}>
+        {busy ? '…' : 'Yes'}
+      </button>
+      <button style={iconBtn} onClick={onCancel}>No</button>
+    </div>
+  );
+}
+
+/* ── Recent tab (last few uploads, read-only cards — click to open) ── */
+function RecentFilesTab({ refreshKey }: { refreshKey: number }) {
+  const [docs, setDocs] = useState<PolicyDocRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [busyId, setBusyId] = useState<number | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    api.getRecentPolicyDocs()
+      .then(res => { if (!cancelled) { setDocs(res.documents || []); setError(''); } })
+      .catch(e => { if (!cancelled) setError(e.message || 'Failed to load recent uploads.'); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [refreshKey]);
+
+  async function openDoc(doc: PolicyDocRow) {
+    setBusyId(doc.pd_id);
+    try {
+      const url = await api.viewPolicyDoc(doc.pd_id);
+      window.open(url, '_blank', 'noopener,noreferrer');
+    } catch (e: any) {
+      setError(e.message || 'Failed to open document.');
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  if (loading) return <p style={{ fontSize: 13, color: 'var(--text-faint)' }}>Loading…</p>;
+  if (error) return <p style={{ fontSize: 13, color: '#dc2626' }}>{error}</p>;
+  if (docs.length === 0) return <p style={{ fontSize: 13, color: 'var(--text-faint)' }}>No documents uploaded yet.</p>;
+
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 14 }}>
+      {docs.map(doc => {
+        const v = fileVisual(doc.file_name);
+        const busy = busyId === doc.pd_id;
+        return (
+          <div key={doc.pd_id} onClick={() => !busy && openDoc(doc)} style={{
+            ...card, cursor: busy ? 'default' : 'pointer', overflow: 'hidden', opacity: busy ? 0.6 : 1,
+          }}>
+            <div style={{ height: 74, background: v.bg, borderRadius: '12px 12px 0 0', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <FileTypeIcon fg={v.fg} label={v.label} size={26} />
+            </div>
+            <div style={{ padding: '10px 12px' }}>
+              <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {doc.file_name || 'Untitled document'}
+              </p>
+              <p style={{ fontSize: 11, color: 'var(--text-faint)', marginTop: 3 }}>
+                {doc.uploadat ? formatDateTime(doc.uploadat) : '—'}
+              </p>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+type ViewMode = 'list' | 'grid' | 'grid-lg';
+const PAGE_SIZE = 8;
+
+/* ── All Files tab: search + pagination + list/grid/large-grid view ── */
+function AllFilesTab({ refreshKey, onChanged }: { refreshKey: number; onChanged: () => void }) {
+  const [docs, setDocs] = useState<PolicyDocRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [busyId, setBusyId] = useState<number | null>(null);
+  const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null);
+  const [openMenuId, setOpenMenuId] = useState<number | null>(null);
+  const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
+  const [viewMode, setViewMode] = useState<ViewMode>('grid');
+
+  /* One shared "close on outside click" listener for every kebab menu.
+     Clicking a kebab button itself is stopped from bubbling here (see
+     KebabMenu), so this only fires for genuine outside clicks — and
+     opening a new menu just re-assigns openMenuId, which closes any
+     other menu that was showing. */
+  useEffect(() => {
+    if (openMenuId === null) return;
+    const close = () => setOpenMenuId(null);
+    window.addEventListener('click', close);
+    return () => window.removeEventListener('click', close);
+  }, [openMenuId]);
+
+  function load() {
+    setLoading(true);
+    api.getPolicyDocs()
+      .then(res => { setDocs(res.documents || []); setError(''); })
+      .catch(e => setError(e.message || 'Failed to load documents.'))
+      .finally(() => setLoading(false));
+  }
+
+  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [refreshKey]);
+  useEffect(() => { setPage(1); }, [search]);
+  useEffect(() => { setOpenMenuId(null); setPendingDeleteId(null); }, [viewMode, page, search]);
+
+  async function handleView(doc: PolicyDocRow) {
+    setBusyId(doc.pd_id);
+    try {
+      const url = await api.viewPolicyDoc(doc.pd_id);
+      window.open(url, '_blank', 'noopener,noreferrer');
+    } catch (e: any) {
+      setError(e.message || 'Failed to open document.');
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function handleDelete(doc: PolicyDocRow) {
+    setBusyId(doc.pd_id);
+    try {
+      await api.deletePolicyDoc(doc.pd_id);
+      setPendingDeleteId(null);
+      onChanged();
+      load();
+    } catch (e: any) {
+      setError(e.message || 'Failed to delete document.');
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  const filtered = docs.filter(d => (d.file_name || '').toLowerCase().includes(search.trim().toLowerCase()));
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const pageSafe = Math.min(page, totalPages);
+  const paged = filtered.slice((pageSafe - 1) * PAGE_SIZE, pageSafe * PAGE_SIZE);
+
+  const modeBtn = (active: boolean): React.CSSProperties => ({
+    width: 30, height: 30, borderRadius: 7, display: 'flex', alignItems: 'center', justifyContent: 'center',
+    border: '1px solid var(--border)', cursor: 'pointer',
+    background: active ? 'var(--accent)' : 'var(--surface)', color: active ? '#fff' : 'var(--text-faint)',
+  });
+
+  return (
+    <div>
+      {/* Search + view mode toggle */}
+      <div style={{ display: 'flex', gap: 10, marginBottom: 16, alignItems: 'center' }}>
+        <div style={{ position: 'relative', flex: 1, maxWidth: 340 }}>
+          <span style={{ position: 'absolute', left: 11, top: '50%', transform: 'translateY(-50%)', fontSize: 13, color: 'var(--text-faint)' }}>🔍</span>
+          <input
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Search files by name…"
+            style={{ ...inputStyle, paddingLeft: 30 }}
+          />
+        </div>
+        <div style={{ display: 'flex', gap: 4, marginLeft: 'auto' }}>
+          <button title="List" style={modeBtn(viewMode === 'list')} onClick={() => setViewMode('list')}>☰</button>
+          <button title="Large icons" style={modeBtn(viewMode === 'grid')} onClick={() => setViewMode('grid')}>▦</button>
+          <button title="Extra-large icons" style={modeBtn(viewMode === 'grid-lg')} onClick={() => setViewMode('grid-lg')}>◱</button>
+        </div>
+      </div>
+
+      {loading && <p style={{ fontSize: 13, color: 'var(--text-faint)' }}>Loading…</p>}
+      {!loading && error && <p style={{ fontSize: 13, color: '#dc2626' }}>{error}</p>}
+      {!loading && !error && filtered.length === 0 && (
+        <p style={{ fontSize: 13, color: 'var(--text-faint)' }}>
+          {search ? `No files match "${search}".` : 'No documents available yet.'}
+        </p>
+      )}
+
+      {!loading && !error && filtered.length > 0 && viewMode === 'list' && (
+        <div style={{ ...card, padding: '4px 16px' }}>
+          {paged.map((doc, i) => {
+            const v = fileVisual(doc.file_name);
+            const busy = busyId === doc.pd_id;
+            return (
+              <div key={doc.pd_id} onClick={() => !busy && handleView(doc)} style={{
+                display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12,
+                padding: '12px 4px', cursor: busy ? 'default' : 'pointer',
+                borderBottom: i < paged.length - 1 ? '1px solid var(--divider)' : 'none', opacity: busy ? 0.6 : 1,
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flex: 1 }}>
+                  <span style={{ width: 30, height: 30, borderRadius: 7, background: v.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                    <FileTypeIcon fg={v.fg} label={v.label} size={17} />
+                  </span>
+                  <p style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {doc.file_name || 'Untitled document'}
+                  </p>
+                </div>
+                <span style={{ fontSize: 12, color: 'var(--text-faint)', flexShrink: 0 }}>
+                  {doc.uploadat ? formatDateTime(doc.uploadat) : '—'}
+                </span>
+                {pendingDeleteId === doc.pd_id
+                  ? <DeleteConfirm busy={busy} onConfirm={() => handleDelete(doc)} onCancel={() => setPendingDeleteId(null)} />
+                  : <KebabMenu
+                      open={openMenuId === doc.pd_id}
+                      onToggle={() => setOpenMenuId(id => (id === doc.pd_id ? null : doc.pd_id))}
+                      onDelete={() => { setOpenMenuId(null); setPendingDeleteId(doc.pd_id); }}
+                    />}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {!loading && !error && filtered.length > 0 && viewMode !== 'list' && (
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: `repeat(auto-fill, minmax(${viewMode === 'grid-lg' ? 220 : 160}px, 1fr))`,
+          gap: 14,
+        }}>
+          {paged.map(doc => {
+            const v = fileVisual(doc.file_name);
+            const busy = busyId === doc.pd_id;
+            const iconHeight = viewMode === 'grid-lg' ? 110 : 74;
+            const iconSize = viewMode === 'grid-lg' ? 42 : 30;
+            return (
+              <div key={doc.pd_id} onClick={() => !busy && pendingDeleteId !== doc.pd_id && handleView(doc)} style={{
+                ...card, cursor: busy ? 'default' : 'pointer', opacity: busy ? 0.6 : 1, position: 'relative',
+                zIndex: openMenuId === doc.pd_id ? 10 : 'auto',
+              }}>
+                <div style={{ height: iconHeight, background: v.bg, borderRadius: '12px 12px 0 0', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <FileTypeIcon fg={v.fg} label={v.label} size={iconSize} />
+                </div>
+                <div style={{ padding: '10px 12px' }}>
+                  <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 6 }}>
+                    <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+                      {doc.file_name || 'Untitled document'}
+                    </p>
+                    {pendingDeleteId !== doc.pd_id && (
+                      <KebabMenu
+                        open={openMenuId === doc.pd_id}
+                        onToggle={() => setOpenMenuId(id => (id === doc.pd_id ? null : doc.pd_id))}
+                        onDelete={() => { setOpenMenuId(null); setPendingDeleteId(doc.pd_id); }}
+                      />
+                    )}
+                  </div>
+                  <p style={{ fontSize: 11, color: 'var(--text-faint)', marginTop: 3 }}>
+                    {doc.uploadat ? formatDateTime(doc.uploadat) : '—'}
+                  </p>
+                  {pendingDeleteId === doc.pd_id && (
+                    <div style={{ marginTop: 8 }}>
+                      <DeleteConfirm busy={busy} onConfirm={() => handleDelete(doc)} onCancel={() => setPendingDeleteId(null)} />
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Pagination */}
+      {!loading && !error && filtered.length > PAGE_SIZE && (
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, marginTop: 20 }}>
+          <button disabled={pageSafe === 1} onClick={() => setPage(p => Math.max(1, p - 1))}
+            style={{ ...pagerBtn, opacity: pageSafe === 1 ? 0.4 : 1, cursor: pageSafe === 1 ? 'default' : 'pointer' }}>‹ Prev</button>
+          <span style={{ fontSize: 12.5, color: 'var(--text-faint)', margin: '0 6px' }}>
+            Page {pageSafe} of {totalPages}
+          </span>
+          <button disabled={pageSafe === totalPages} onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+            style={{ ...pagerBtn, opacity: pageSafe === totalPages ? 0.4 : 1, cursor: pageSafe === totalPages ? 'default' : 'pointer' }}>Next ›</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const pagerBtn: React.CSSProperties = {
+  height: 30, padding: '0 12px', borderRadius: 7, fontSize: 12.5, fontWeight: 600,
+  border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text-soft)',
+};
+
 /* ── Add Documents (policy PDF upload → chatbot-service /policy_upload) ── */
-function PolicyUploadSection() {
+function PolicyUploadSection({ onUploaded }: { onUploaded?: () => void }) {
   const [files, setFiles] = useState<File[]>([]);
   const [status, setStatus] = useState<'idle' | 'uploading' | 'success' | 'error'>('idle');
   const [errorMsg, setErrorMsg] = useState('');
@@ -241,6 +632,7 @@ function PolicyUploadSection() {
       await api.uploadPolicyDocs(files);
       setStatus('success');
       setFiles([]);
+      onUploaded?.();
       setTimeout(() => setStatus('idle'), 2500);
     } catch (e: any) {
       setStatus('error');

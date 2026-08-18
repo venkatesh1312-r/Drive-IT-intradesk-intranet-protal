@@ -13,17 +13,21 @@ except ImportError:
 _executor = ThreadPoolExecutor(max_workers=4)
 
 # ── Load guardrails ONCE at startup ───────────────────────────────────────────
+# NOTE: Guardrails AI retired the old `guardrails hub install` /
+# `guardrails-grhub-*` package naming and `from guardrails.hub import ...`
+# import path (cutoff Aug 6, 2026 — see https://github.com/guardrails-ai/guardrails).
+# Validators are now plain PyPI packages imported from `guardrails_ai.*`.
 print("[Guardrails] Loading ToxicLanguage model...")
 try:
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         from guardrails import Guard
-        from guardrails.hub import ToxicLanguage
+        from guardrails_ai.toxic_language import ToxicLanguage
         _input_guard = Guard().use(
-            ToxicLanguage(threshold=0.5, validation_method="sentence", on_fail="exception")
+            ToxicLanguage, threshold=0.5, validation_method="sentence", on_fail="exception"
         )
         _output_guard = Guard().use(
-            ToxicLanguage(threshold=0.5, validation_method="sentence", on_fail="exception")
+            ToxicLanguage, threshold=0.5, validation_method="sentence", on_fail="exception"
         )
     print("[Guardrails] ToxicLanguage model loaded ✓")
     GUARDRAILS_READY = True
