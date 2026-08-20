@@ -1,6 +1,14 @@
 'use client';
-import { useState, useEffect } from 'react';
+// These pages are auth-gated and per-user (identity is fetched fresh from
+// /me on every load) — there's nothing meaningful to statically prerender.
+// force-dynamic does NOT exempt useActiveTab's useSearchParams() from
+// needing a real Suspense boundary at build time (Next.js's static-export
+// bailout check still fires regardless) — the default export below wraps
+// the page in <Suspense> for that reason.
+export const dynamic = 'force-dynamic';
+import { Suspense, useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
+import { useActiveTab } from '@/lib/useActiveTab';
 import { api } from '@/lib/api';
 import { DriveITLogo, DriveITMark } from '@/components/DriveITLogo';
 import { NotificationBell } from '@/components/NotificationBell';
@@ -14,6 +22,7 @@ const PER_PAGE = 10;
 
 /* ── Nav items ───────────────────────────────────────────────────── */
 type Module = 'overview' | 'reward' | 'helpdesk' | 'worklog' | 'settings';
+const MODULE_KEYS: Module[] = ['overview', 'reward', 'helpdesk', 'worklog', 'settings'];
 
 const NAV: { key: Module; label: string; icon: () => JSX.Element }[] = [
   { key: 'overview', label: 'Overview', icon: () => <svg width={18} height={18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg> },
@@ -53,7 +62,7 @@ function RewardModule() {
       setReceived(rec);
       setTotalPoints(wallet?.points ?? 0);
       setBoard(lb);
-    } catch {}
+    } catch (e: any) { alert(e.message || 'Failed to load rewards. Please refresh.'); }
   }
 
   // Category breakdown of received recognition
@@ -241,7 +250,7 @@ function HelpdeskModule({ user }: { user: any }) {
         ? await api.getDeptQueue()
         : await api.getMyTickets();
       setTickets(data);
-    } catch {}
+    } catch (e: any) { alert(e.message || 'Failed to load tickets. Please refresh.'); }
   }
 
   async function openTicket(t: any) {
@@ -253,7 +262,7 @@ function HelpdeskModule({ user }: { user: any }) {
       setShowBlockForm(false);
       setResolveNote('');
       setBlockReason('');
-    } catch {}
+    } catch (e: any) { alert(e.message || 'Failed to load ticket.'); }
   }
 
   async function handleCreate(e: React.FormEvent) {
@@ -277,7 +286,7 @@ function HelpdeskModule({ user }: { user: any }) {
       const newComment = await api.createComment(selectedTicket.id, { message: comment });
       setComments(prev => [...prev, newComment]);
       setComment('');
-    } catch {}
+    } catch (e: any) { alert(e.message || 'Failed to post comment.'); }
     finally { setCommentLoading(false); }
   }
 
@@ -298,7 +307,7 @@ function HelpdeskModule({ user }: { user: any }) {
       setShowBlockForm(false);
       setResolveNote('');
       setBlockReason('');
-    } catch {}
+    } catch (e: any) { alert(e.message || 'Action failed. Please try again.'); }
     finally { setActionLoading(false); }
   }
 
@@ -961,23 +970,38 @@ function PreRegisterGuestModal({ onClose, onCreated }: { onClose: () => void; on
   );
 }
 
-export default function DashboardPage() {
+function DashboardPageInner() {
   const router = useRouter();
   const [user, setUser] = useState<any>(null);
-  const [activeModule, setActiveModule] = useState<Module>('overview');
+  // Point 2: persisted across refresh via the URL's ?tab= param (no
+  // storage — see useActiveTab).
+  const [activeModule, setActiveModule] = useActiveTab<Module>('/dashboard', MODULE_KEYS, 'overview');
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [hoveredItem, setHoveredItem] = useState<Module | null>(null);
   const [showUserInfo, setShowUserInfo] = useState(false);
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
+  const profileRef = useRef<HTMLDivElement>(null);
 
-  // Theme is per-user and stored locally — toggling here never affects other users or the admin/HR portals
+  // Point 8: close the profile dropdown on any click outside it (it
+  // previously only closed via its own toggle arrow).
   useEffect(() => {
-    try { const e = JSON.parse(localStorage.getItem('user') || '{}')?.email; if (localStorage.getItem('theme_' + e) === 'dark') setTheme('dark'); } catch {}
-  }, []);
+    if (!showUserInfo) return;
+    function onClickOutside(e: MouseEvent) {
+      if (profileRef.current && !profileRef.current.contains(e.target as Node)) {
+        setShowUserInfo(false);
+      }
+    }
+    document.addEventListener('mousedown', onClickOutside);
+    return () => document.removeEventListener('mousedown', onClickOutside);
+  }, [showUserInfo]);
+
+  // Theme is per-user, persisted server-side (see getPreferences below) —
+  // no localStorage, so it follows the person to any machine they log in
+  // from instead of being stuck per-browser.
   function toggleTheme() {
     setTheme(prev => {
       const next = prev === 'dark' ? 'light' : 'dark';
-      try { const e = JSON.parse(localStorage.getItem('user') || '{}')?.email; localStorage.setItem('theme_' + e, next); } catch {}
+      api.updatePreferences({ theme: next }).catch(() => {}); // best-effort; UI already reflects the change
       return next;
     });
   }
@@ -989,26 +1013,24 @@ export default function DashboardPage() {
     return () => { document.documentElement.removeAttribute('data-theme'); };
   }, [theme]);
 
+  // Identity + role always comes fresh from the cookie-authenticated /me
+  // call — nothing cached client-side. A role mismatch (e.g. an HR/ADMIN
+  // account landing here) redirects to the right portal instead of
+  // showing this one.
   useEffect(() => {
-    const stored = localStorage.getItem('user');
-    if (!stored) { router.push('/'); return; }
-    const u = JSON.parse(stored);
-    if (u.role === 'ADMIN' || u.role === 'HR') { router.push(u.role === 'HR' ? '/hr' : '/admin'); return; }
-    if (u.role === 'IT') { router.push('/it'); return; }
     api.getMe().then(me => {
-      setUser({ ...u, id: me.id, name: me.name, points: me.points });
-    }).catch(() => {
-      // 401 is already handled in api.ts (clears storage + redirects).
-      // For network errors (backend down), keep the stored session.
-      setUser(u);
-    });
+      if (me.role === 'ADMIN' || me.role === 'HR') { router.push(me.role === 'HR' ? '/hr' : '/admin'); return; }
+      if (me.role === 'IT') { router.push('/it'); return; }
+      setUser(me);
+      if (me.theme === 'dark') setTheme('dark');
+    }).catch(() => router.push('/')); // 401 → api.ts already redirects, this is just a fallback
   }, []);
 
   // IT agents see only the Help Desk (plus Settings); everyone else sees all modules
   const navItems = user?.role === 'IT' ? NAV.filter(n => n.key === 'helpdesk' || n.key === 'settings') : NAV;
   const roleLabel = user?.role === 'IT' ? 'IT Support' : 'Employee';
 
-  function logout() { localStorage.clear(); router.push('/'); }
+  function logout() { api.logout().finally(() => router.push('/')); }
 
   const SIDEBAR_W = sidebarOpen ? 240 : 64;
 
@@ -1077,10 +1099,20 @@ export default function DashboardPage() {
           })}
         </nav>
 
-        <div style={{ borderTop: '1px solid #0e2744', padding: sidebarOpen ? '14px 16px' : '14px 13px', position: 'relative' }}>
-          {showUserInfo && sidebarOpen && (
-            <div style={{ position: 'absolute', bottom: '100%', left: 12, right: 12, background: '#0d1f3c', border: '1px solid #1e3a5f', borderRadius: 12, padding: 16, marginBottom: 8, boxShadow: '0 -8px 32px rgba(0,0,0,0.5)', zIndex: 20 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
+        <div ref={profileRef} style={{ borderTop: '1px solid #0e2744', padding: sidebarOpen ? '14px 16px' : '14px 13px', position: 'relative' }}>
+          {showUserInfo && (
+            <div style={{
+              position: 'absolute', bottom: '100%', marginBottom: 8,
+              // Point 9: previously this only rendered when the sidebar
+              // was expanded, so collapsing it made the dropdown
+              // unreachable. When collapsed, anchor it to the left edge
+              // and give it a fixed width instead of stretching to the
+              // (now much narrower) sidebar.
+              left: sidebarOpen ? 12 : 8,
+              right: sidebarOpen ? 12 : 'auto',
+              width: sidebarOpen ? 'auto' : 240,
+              background: '#0d1f3c', border: '1px solid #1e3a5f', borderRadius: 12, padding: 16, boxShadow: '0 -8px 32px rgba(0,0,0,0.5)', zIndex: 20,
+            }}>              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
                 <div style={{ width: 46, height: 46, borderRadius: '50%', background: '#1e3a5f', border: '2px solid #22d3ee', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
                   <span style={{ fontSize: 17, fontWeight: 700, color: '#22d3ee' }}>{user?.name?.charAt(0).toUpperCase()}</span>
                 </div>
@@ -1151,5 +1183,13 @@ export default function DashboardPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function DashboardPage() {
+  return (
+    <Suspense fallback={null}>
+      <DashboardPageInner />
+    </Suspense>
   );
 }

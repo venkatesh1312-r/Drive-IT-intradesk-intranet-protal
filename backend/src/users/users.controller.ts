@@ -28,8 +28,38 @@ export class UsersController {
 
   @Get('me')
   getMe(@Request() req) {
-    // req.user is already stripped of credential fields by JwtStrategy.
+    // req.user is already stripped of credential fields by JwtStrategy —
+    // this includes theme/notification prefs, so a single /me call gives
+    // every page everything it needs without any client-side caching.
     return req.user;
+  }
+
+  // Server-side preferences (theme + notification toggles) — replaces the
+  // old theme_<email>/notif_prefs_<email> localStorage keys, so settings
+  // now follow the person to any machine they log in from.
+  @Get('me/preferences')
+  getPreferences(@Request() req) {
+    return this.prisma.user.findUnique({
+      where: { id: req.user.id },
+      select: { theme: true, notifTicketUpdates: true, notifRecognitions: true, notifWeeklySummary: true },
+    });
+  }
+
+  @Patch('me/preferences')
+  async updatePreferences(
+    @Request() req,
+    @Body() body: { theme?: 'light' | 'dark'; ticketUpdates?: boolean; recognitions?: boolean; weeklySummary?: boolean },
+  ) {
+    const data: any = {};
+    if (body.theme === 'light' || body.theme === 'dark') data.theme = body.theme;
+    if (typeof body.ticketUpdates === 'boolean') data.notifTicketUpdates = body.ticketUpdates;
+    if (typeof body.recognitions === 'boolean') data.notifRecognitions = body.recognitions;
+    if (typeof body.weeklySummary === 'boolean') data.notifWeeklySummary = body.weeklySummary;
+    return this.prisma.user.update({
+      where: { id: req.user.id },
+      data,
+      select: { theme: true, notifTicketUpdates: true, notifRecognitions: true, notifWeeklySummary: true },
+    });
   }
 
   // Self-service profile update — only name and job title are editable

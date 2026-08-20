@@ -61,7 +61,7 @@ const vector_search = async (data) => {
     await prisma.$executeRaw`SET hnsw.ef_search = 20`
 
     const rows = await prisma.$queryRaw`
-      SELECT chunk_text, embedding <=> ${embedding_str}::vector AS distance
+      SELECT chunk_text, pd_id, page_number, embedding <=> ${embedding_str}::vector AS distance
       FROM "CHUNKED_POLICY_DOC"
       ORDER BY distance
       LIMIT 5

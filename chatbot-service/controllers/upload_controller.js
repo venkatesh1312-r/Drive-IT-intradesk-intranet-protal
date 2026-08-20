@@ -4,6 +4,7 @@ import chunk_policy_insertion from '../services/chunk_policy_services.js'
 import generate_embedding from '../services/embedding_services.js'
 import text_to_chunks from '../services/chunk_services.js'
 import extract_pdf_text from '../services/pdf_services.js'
+import { saveAbbreviations } from '../services/abbreviation_services.js'
 
 export const upload_pdf = async (req, res) => {
   try {
@@ -21,13 +22,19 @@ export const upload_pdf = async (req, res) => {
       const file_path = file.path
       const file_name = file.filename
 
-      const full_text = await extract_pdf_text(file_path)
-      const pd_id = await policy_insertion(file_name, full_text, upload_batch)
-      const chunks = await text_to_chunks(full_text)
+      const { fullText, pages } = await extract_pdf_text(file_path)
+      const pd_id = await policy_insertion(file_name, fullText, upload_batch)
+
+      // Auto-detect "Full Term (ABBR)" style shortcuts defined in this PDF
+      // (e.g. "Casual Leave (CL)") so the bot understands them later —
+      // no hardcoded list, works for whatever a given policy PDF defines.
+      await saveAbbreviations(pd_id, fullText)
+
+      const chunks = await text_to_chunks(pages)
 
       const embeddingPromises = chunks.map((chunk, i) =>
         generate_embedding(chunk.pageContent).then((embedding) =>
-          chunk_policy_insertion(pd_id, i + 1, chunk.pageContent, embedding),
+          chunk_policy_insertion(pd_id, i + 1, chunk.pageContent, embedding, chunk.page_number),
         ),
       )
       await Promise.all(embeddingPromises)

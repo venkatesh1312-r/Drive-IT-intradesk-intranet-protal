@@ -1,11 +1,17 @@
 'use client';
-import React, { useState, useEffect } from 'react';
+// See dashboard/page.tsx for why: auth-gated, per-user, nothing to
+// statically prerender. force-dynamic does NOT exempt useActiveTab's
+// useSearchParams() from needing a real Suspense boundary at build time —
+// the default export below wraps the page in <Suspense> for that reason.
+export const dynamic = 'force-dynamic';
+import React, { Suspense, useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 import { DriveITLogo, DriveITMark } from '@/components/DriveITLogo';
 import { NotificationBell } from '@/components/NotificationBell';
 import { Pagination } from '@/components/Pagination';
 import { WorkLogModule } from '@/components/WorkLogModule';
+import { useActiveTab } from '@/lib/useActiveTab';
 import { AskAiFab } from '@/components/AskAiFab';
 
 const PER_PAGE = 10;
@@ -42,13 +48,26 @@ const inputStyle: React.CSSProperties = {
 };
 
 /* ── IT Helpdesk page ────────────────────────────────────────────── */
-export default function ITDashboard() {
+function ITDashboardInner() {
   const router = useRouter();
   const [user, setUser] = useState<any>(null);
   const [theme, setTheme] = useState('light');
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [showUserInfo, setShowUserInfo] = useState(false);
-  const [view, setView] = useState<View>('queue');
+  const profileRef = useRef<HTMLDivElement>(null);
+
+  // Point 6: close the profile dropdown on any click outside it.
+  useEffect(() => {
+    if (!showUserInfo) return;
+    function onClickOutside(e: MouseEvent) {
+      if (profileRef.current && !profileRef.current.contains(e.target as Node)) {
+        setShowUserInfo(false);
+      }
+    }
+    document.addEventListener('mousedown', onClickOutside);
+    return () => document.removeEventListener('mousedown', onClickOutside);
+  }, [showUserInfo]);
+  const [view, setView] = useActiveTab<View>('/it', ['queue', 'mine', 'worklog'], 'queue'); // point 2: persists across refresh via URL
   const [statusFilter, setStatusFilter] = useState('ALL');
   const [tickets, setTickets] = useState<any[]>([]);
   const [selected, setSelected] = useState<any>(null);
@@ -64,13 +83,11 @@ export default function ITDashboard() {
 
   /* ── Auth ── */
   useEffect(() => {
-    const stored = localStorage.getItem('user');
-    if (!stored) { router.push('/'); return; }
-    const u = JSON.parse(stored);
-    if (u.role !== 'IT') { router.push(u.role === 'ADMIN' ? '/admin' : u.role === 'HR' ? '/hr' : '/dashboard'); return; }
-    const saved = localStorage.getItem('theme_' + u.email);
-    if (saved) setTheme(saved);
-    api.getMe().then(me => setUser({ ...u, id: me.id, name: me.name })).catch(() => { setUser(u); });
+    api.getMe().then(me => {
+      if (me.role !== 'IT') { router.push(me.role === 'ADMIN' ? '/admin' : me.role === 'HR' ? '/hr' : '/dashboard'); return; }
+      setUser(me);
+      if (me.theme === 'dark') setTheme('dark');
+    }).catch(() => router.push('/'));
   }, []);
 
   useEffect(() => {
@@ -84,7 +101,7 @@ export default function ITDashboard() {
     try {
       const data = view === 'queue' ? await api.getDeptQueue() : await api.getMyTickets();
       setTickets(data);
-    } catch {}
+    } catch (e: any) { alert(e.message || 'Failed to load tickets. Please refresh.'); }
   }
 
   async function openTicket(t: any) {
@@ -93,7 +110,7 @@ export default function ITDashboard() {
       setSelected(detail); setComments(comms);
       setShowResolveForm(false); setShowBlockForm(false);
       setResolveNote(''); setBlockReason('');
-    } catch {}
+    } catch (e: any) { alert(e.message || 'Failed to load ticket.'); }
   }
 
   async function ticketAction(body: object) {
@@ -106,7 +123,7 @@ export default function ITDashboard() {
       loadTickets();
       setShowResolveForm(false); setShowBlockForm(false);
       setResolveNote(''); setBlockReason('');
-    } catch {}
+    } catch (e: any) { alert(e.message || 'Action failed. Please try again.'); }
     finally { setActionLoading(false); }
   }
 
@@ -118,19 +135,19 @@ export default function ITDashboard() {
       const c = await api.createComment(selected.id, { message: comment });
       setComments(prev => [...prev, c]);
       setComment('');
-    } catch {}
+    } catch (e: any) { alert(e.message || 'Failed to post comment.'); }
     finally { setCommentLoading(false); }
   }
 
   function toggleTheme() {
     setTheme(prev => {
       const next = prev === 'dark' ? 'light' : 'dark';
-      try { const e = JSON.parse(localStorage.getItem('user') || '{}')?.email; localStorage.setItem('theme_' + e, next); } catch {}
+      api.updatePreferences({ theme: next }).catch(() => {});
       return next;
     });
   }
 
-  function logout() { localStorage.clear(); router.push('/'); }
+  function logout() { api.logout().finally(() => router.push('/')); }
 
   if (!user) return null;
 
@@ -464,9 +481,15 @@ export default function ITDashboard() {
         </nav>
 
         {/* User + logout */}
-        <div style={{ borderTop: '1px solid #0e2744', padding: sidebarOpen ? '14px 16px' : '14px 13px', position: 'relative' }}>
-          {showUserInfo && sidebarOpen && (
-            <div style={{ position: 'absolute', bottom: '100%', left: 12, right: 12, background: '#0d1f3c', border: '1px solid #1e3a5f', borderRadius: 12, padding: 16, marginBottom: 8, boxShadow: '0 -8px 32px rgba(0,0,0,0.5)', zIndex: 20 }}>
+        <div ref={profileRef} style={{ borderTop: '1px solid #0e2744', padding: sidebarOpen ? '14px 16px' : '14px 13px', position: 'relative' }}>
+          {showUserInfo && (
+            <div style={{
+              position: 'absolute', bottom: '100%', marginBottom: 8,
+              left: sidebarOpen ? 12 : 8,
+              right: sidebarOpen ? 12 : 'auto',
+              width: sidebarOpen ? 'auto' : 240,
+              background: '#0d1f3c', border: '1px solid #1e3a5f', borderRadius: 12, padding: 16, boxShadow: '0 -8px 32px rgba(0,0,0,0.5)', zIndex: 20,
+            }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
                 <div style={{ width: 46, height: 46, borderRadius: '50%', background: 'rgba(14,165,233,0.15)', border: `2px solid ${ACCENT}`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
                   <span style={{ fontSize: 17, fontWeight: 700, color: ACCENT }}>{user?.name?.charAt(0).toUpperCase()}</span>
@@ -531,5 +554,13 @@ export default function ITDashboard() {
 
       <AskAiFab />
     </div>
+  );
+}
+
+export default function ITDashboard() {
+  return (
+    <Suspense fallback={null}>
+      <ITDashboardInner />
+    </Suspense>
   );
 }

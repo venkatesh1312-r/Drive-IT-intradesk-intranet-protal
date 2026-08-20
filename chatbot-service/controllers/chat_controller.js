@@ -1,6 +1,7 @@
-import { askLLM } from "../services/llm_services.js"
+import { askLLM, CITATION_MARKER } from "../services/llm_services.js"
 import vector_search from "../services/vector_search_services.js"
 import { getAllSessions, getSessionById, upsertSession, deleteSessionById } from "../services/session_services.js"
+import { expandAbbreviations } from "../services/abbreviation_services.js"
 import Groq from 'groq-sdk'
 import prisma from '../config/prisma.js'
 
@@ -127,11 +128,16 @@ function isSmalltalk(text) {
 }
 
 function streamPlainText(res, text) {
-  res.setHeader('Content-Type', 'text/plain')
-  res.setHeader('Transfer-Encoding', 'chunked')
-  res.flushHeaders()
-  res.write(text)
-  res.end()
+  try {
+    res.setHeader('Content-Type', 'text/plain')
+    res.setHeader('Transfer-Encoding', 'chunked')
+    res.flushHeaders()
+    res.write(text)
+    res.end()
+  } catch (err) {
+    // Client already disconnected — nothing to do, caller logic above
+    // this (logQuestion, etc.) has already run where relevant.
+  }
 }
 
 function toUIMessages(llmHistory) {
@@ -153,6 +159,58 @@ function logQuestion(question, topic, session_id) {
   prisma.questionLog
     .create({ data: { question, topic, session_id } })
     .catch(err => console.error('[Log error]', err.message))
+}
+
+// ── Build a real, page-accurate citation from the actual top-matched
+// chunk (never from the model's imagination). Returns null if we don't
+// have enough info to link anywhere useful.
+const SECTION_RE = /Section\s+(\d+)[.:]?\s*([A-Za-z0-9 ,&'/-]{0,60})?/i
+const SECTION_RE_G = /Section\s+(\d+)[.:]?\s*([A-Za-z0-9 ,&'/-]{0,60})?/gi
+
+function formatSection(match) {
+  return `Section ${match[1]}${match[2] && match[2].trim() ? '. ' + match[2].trim() : ''}`
+}
+
+async function buildCitation(topChunk) {
+  if (!topChunk || !topChunk.pd_id) return null
+
+  const chunkText = topChunk.chunk_text || ''
+  const page = topChunk.page_number || null
+
+  // 1. Fast path: the answer chunk itself contains a "Section N. Title"
+  // heading (works when the chunk starts right at a section boundary).
+  const direct = chunkText.match(SECTION_RE)
+  if (direct) {
+    return { pd_id: topChunk.pd_id, page, section: formatSection(direct) }
+  }
+
+  // 2. Common case: the chunk is mid-section, so its heading actually
+  // lives earlier in the document (a previous 600-char chunk). Pull the
+  // full document text and take the nearest heading that appears BEFORE
+  // this chunk, rather than only ever looking inside the answer chunk.
+  try {
+    const doc = await prisma.policyDoc.findUnique({
+      where: { pd_id: topChunk.pd_id },
+      select: { full_text: true },
+    })
+    const fullText = doc?.full_text || ''
+    if (fullText && chunkText) {
+      const anchor = chunkText.slice(0, 40) // enough to locate uniquely, tolerant of chunk-boundary whitespace diffs
+      const idx = fullText.indexOf(anchor)
+      const searchWindow = idx > -1 ? fullText.slice(0, idx + chunkText.length) : fullText
+      const headings = [...searchWindow.matchAll(SECTION_RE_G)]
+      if (headings.length) {
+        return { pd_id: topChunk.pd_id, page, section: formatSection(headings[headings.length - 1]) }
+      }
+    }
+  } catch (err) {
+    console.error('[buildCitation] full_text lookup failed:', err.message)
+  }
+
+  // 3. No heading found anywhere in the document before this point —
+  // still return a citation (page-accurate) with no section label; the
+  // frontend falls back to a generic "Source policy" label in this case.
+  return { pd_id: topChunk.pd_id, page, section: null }
 }
 
 // ─── GET /askbot/sessions ─────────────────────────────────────────
@@ -287,6 +345,15 @@ const askQuestion = async (req, res) => {
 
     const history = conversationStore.get(session_id)
 
+    // ── Safety-net save: persist the question immediately, before we
+    // even generate a reply. If the tab is closed/refreshed mid-answer,
+    // the question itself is never lost — only the (still-being-typed)
+    // answer would be, and that gets saved properly once generation
+    // finishes below (llm_services.js keeps generating even if the
+    // client already left, precisely so this save still happens).
+    saveInBackground(session_id, [...history, { role: 'user', content: question }], emp_id)
+    knownSessions.add(session_id)
+
     // ── Smalltalk ─────────────────────────────────────────────────
     if (isSmalltalk(question)) {
       const assistantReply = await askLLM("", question, history.slice(-4), res)
@@ -305,10 +372,19 @@ const askQuestion = async (req, res) => {
     const lastUserMsg   = history.length >= 2 ? history[history.length - 2]?.content : null
     const lastBotAnswer = history.length >= 1 ? history[history.length - 1]?.content : null
 
+    // ── Expand known shortcuts (CL, EL, WFH, ...) before classifying or
+    // searching, so "what is cl and el" actually retrieves the Casual
+    // Leave / Earned Leave chunks. The map is auto-built from whatever
+    // "Full Term (ABBR)" patterns exist in uploaded PDFs — see
+    // abbreviation_services.js — so it grows with new policy docs
+    // without any code change.
+    const expandedQuestion = await expandAbbreviations(question)
+    debugLog(`[Abbrev] "${question}" -> "${expandedQuestion}"`)
+
     // ── Run in parallel ───────────────────────────────────────────
     const [classification, chunks, prevIsRelevant] = await Promise.all([
-      classifyQuestion(question),
-      vector_search(question),
+      classifyQuestion(expandedQuestion),
+      vector_search(expandedQuestion),
       isPreviousRelevant(question, lastUserMsg, lastBotAnswer),
     ])
 
@@ -356,11 +432,20 @@ const askQuestion = async (req, res) => {
     // ── RAG answer ────────────────────────────────────────────────
     const context        = chunks.slice(0, 3).map(c => c.chunk_text).join('\n')
     const noteToAppend   = (!prevIsRelevant && count === 3) ? HR_NOTE : ""
-    const assistantReply = await askLLM(context, question, contextualHistory, res, noteToAppend)
+    const citation        = await buildCitation(chunks[0])
+    const assistantReply = await askLLM(context, question, contextualHistory, res, noteToAppend, citation)
 
     if (assistantReply) {
+      // Same suffix, same order, as what was actually streamed to the
+      // client in llm_services.js (answer -> HR note -> citation), so a
+      // reopened session renders identically to what was live-streamed.
+      const isNotAvailable = assistantReply.includes('This information is not available in the company policy')
+      const citationSuffix = (citation && !isNotAvailable)
+        ? CITATION_MARKER + JSON.stringify(citation)
+        : ""
+
       history.push({ role: 'user', content: question })
-      history.push({ role: 'assistant', content: assistantReply + noteToAppend })
+      history.push({ role: 'assistant', content: assistantReply + noteToAppend + citationSuffix })
       if (history.length > 10) history.splice(0, 2)
       conversationStore.set(session_id, history)
       knownSessions.add(session_id)

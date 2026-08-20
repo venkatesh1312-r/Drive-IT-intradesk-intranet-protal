@@ -1,6 +1,6 @@
 'use client';
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { api, CHATBOT_BASE, getToken } from '@/lib/api';
+import { api, CHATBOT_BASE } from '@/lib/api';
 
 // crypto.randomUUID() only exists in secure contexts (https:// or localhost).
 // Over plain http:// on a LAN IP it's undefined even though `crypto` itself
@@ -32,8 +32,45 @@ const LOADING_MESSAGES = [
   'Getting your answer ready',
 ];
 
-type Msg = { role: 'user' | 'bot'; text: string };
+type Citation = { pd_id: number; page: number | null; section: string | null };
+type Msg = { role: 'user' | 'bot'; text: string; citation?: Citation | null };
 type Session = { id: string; title: string; updated_at: string };
+
+// Must match CITATION_MARKER in chatbot-service/services/llm_services.js.
+const CITATION_MARKER = '\u200b\u200bCITATION\u200b\u200b';
+
+function splitCitation(raw: string): { text: string; citation: Citation | null } {
+  const idx = raw.indexOf(CITATION_MARKER);
+  if (idx === -1) return { text: raw, citation: null };
+  const jsonPart = raw.slice(idx + CITATION_MARKER.length);
+  let citation: Citation | null = null;
+  try { citation = JSON.parse(jsonPart); } catch { /* still streaming in, ignore until complete */ }
+  const text = raw.slice(0, idx);
+  // Defensive: never show a section citation on the "not available"
+  // fallback message, even if something upstream slipped through.
+  if (text.includes('This information is not available in the company policy')) {
+    return { text, citation: null };
+  }
+  return { text, citation };
+}
+
+const EMAIL_RE = /([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/g;
+
+// Renders message text exactly as before (including any literal markdown
+// characters like **) — the ONLY change is the HR email becomes a
+// clickable mailto: link, colored blue so it's visibly a link against
+// either bubble background.
+function renderMessageText(text: string, isUser: boolean): React.ReactNode[] {
+  const parts = text.split(EMAIL_RE); // odd indices = email matches
+  const linkColor = isUser ? '#bfdbfe' : '#2563eb'; // light blue on the dark user bubble, standard blue on the light bot bubble
+  return parts.map((part, i) =>
+    i % 2 === 1 ? (
+      <a key={i} href={`mailto:${part}`} style={{ color: linkColor, textDecoration: 'underline', fontWeight: 600 }}>{part}</a>
+    ) : (
+      <React.Fragment key={i}>{part}</React.Fragment>
+    )
+  );
+}
 
 function formatDate(iso: string) {
   const diff = Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
@@ -65,6 +102,7 @@ export function AskAiFab() {
   const [sessionsLoading, setSessionsLoading] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   const session_id = useRef<string>(safeRandomUUID());
 
   /* Esc closes drawer (or the history panel first) */
@@ -78,8 +116,32 @@ export function AskAiFab() {
     return () => document.removeEventListener('keydown', onKey);
   }, [open, showHistory]);
 
-  /* Load history when the drawer first opens */
-  useEffect(() => { if (open) fetchSessions(); }, [open]);
+  /* Load history when the drawer first opens. Point 7: always land on a
+     fresh "new chat" — never auto-resume whatever was open last time. */
+  useEffect(() => {
+    if (open) {
+      fetchSessions();
+      startNewChat();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  // Keep the input focused: on open, and again once it's re-enabled after
+  // a reply finishes. Only relevant while composing a new message — the
+  // input is hidden entirely while browsing history (see below).
+  useEffect(() => {
+    if (open && !showHistory && !loading) inputRef.current?.focus();
+  }, [open, showHistory, loading]);
+
+  const viewCitation = useCallback(async (citation: Citation) => {
+    try {
+      const blobUrl = await api.viewPolicyDoc(citation.pd_id);
+      const url = citation.page ? `${blobUrl}#page=${citation.page}` : blobUrl;
+      window.open(url, '_blank', 'noopener,noreferrer');
+    } catch {
+      /* document may have been deleted since the chunk was indexed — noop */
+    }
+  }, []);
 
   const fetchSessions = async () => {
     try {
@@ -111,7 +173,13 @@ export function AskAiFab() {
       const data = await api.getChatSession(s.id);
       if (data.success) {
         session_id.current = s.id;
-        setMessages(data.session.messages);
+        // Saved bot messages may carry the raw citation marker — split it
+        // back into { text, citation } so old conversations render the
+        // same clickable "View Section" button as live ones.
+        const restored: Msg[] = (data.session.messages || []).map((m: Msg) =>
+          m.role === 'bot' ? { ...m, ...splitCitation(m.text) } : m
+        );
+        setMessages(restored);
         setShowHistory(false);
       }
     } catch { /* noop */ }
@@ -144,10 +212,10 @@ export function AskAiFab() {
     setMessages(prev => [...prev, { role: 'user', text: question }]);
     setLoading(true);
     try {
-      const token = getToken();
       const response = await fetch(`${CHATBOT_BASE}/askbot`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        credentials: 'include', // httpOnly auth cookie, sent automatically
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ question, session_id: session_id.current }),
       });
       if (!response.ok || !response.body) {
@@ -164,14 +232,15 @@ export function AskAiFab() {
         const { done, value } = await reader.read();
         if (done) break;
         accumulated += decoder.decode(value, { stream: true });
+        const { text: displayText, citation } = splitCitation(accumulated);
         if (!botAdded) {
           setLoading(false);
-          setMessages(prev => [...prev, { role: 'bot', text: accumulated }]);
+          setMessages(prev => [...prev, { role: 'bot', text: displayText, citation }]);
           botAdded = true;
         } else {
           setMessages(prev => {
             const updated = [...prev];
-            updated[updated.length - 1] = { ...updated[updated.length - 1], text: accumulated };
+            updated[updated.length - 1] = { ...updated[updated.length - 1], text: displayText, citation };
             return updated;
           });
         }
@@ -193,7 +262,14 @@ export function AskAiFab() {
 
   return (
     <>
-      <style>{`@keyframes askDot { 0%,80%,100% { opacity:.3; transform:scale(.7);} 40% { opacity:1; transform:scale(1);} }`}</style>
+      <style>{`
+        @keyframes askDot { 0%,80%,100% { opacity:.3; transform:scale(.7);} 40% { opacity:1; transform:scale(1);} }
+        /* Selected text used to render in the browser's default blue,
+           unreadable on the accent-colored user bubble and invisible on
+           the plain bot bubble. Give each its own contrasting highlight. */
+        .askai-bubble-user::selection, .askai-bubble-user *::selection { background: rgba(0,0,0,0.35); color: #ffffff; }
+        .askai-bubble-bot::selection, .askai-bubble-bot *::selection { background: var(--accent-soft); color: var(--text); }
+      `}</style>
 
       {/* FAB */}
       {!open && (
@@ -288,11 +364,23 @@ export function AskAiFab() {
                 {messages.map((msg, i) => (
                   <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: msg.role === 'user' ? 'flex-end' : 'flex-start' }}>
                     <span style={{ fontSize: 10.5, color: 'var(--text-faint)', padding: '0 4px' }}>{msg.role === 'user' ? 'You' : 'Assistant'}</span>
-                    <div style={{ maxWidth: '85%', padding: '10px 14px', borderRadius: 14, fontSize: 13.5, lineHeight: 1.55, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                    <div
+                      className={msg.role === 'user' ? 'askai-bubble-user' : 'askai-bubble-bot'}
+                      style={{ maxWidth: '85%', padding: '10px 14px', borderRadius: 14, fontSize: 13.5, lineHeight: 1.55, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
                       background: msg.role === 'user' ? 'var(--accent)' : 'var(--surface)',
                       color: msg.role === 'user' ? '#fff' : 'var(--text)',
                       border: msg.role === 'user' ? 'none' : '1px solid var(--border)' }}>
-                      {msg.text}
+                      {renderMessageText(msg.text, msg.role === 'user')}
+                      {msg.citation && (
+                        <div style={{ marginTop: 8 }}>
+                          <button
+                            onClick={() => viewCitation(msg.citation as Citation)}
+                            style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11.5, fontWeight: 600, color: 'var(--accent)', background: 'var(--accent-soft)', border: '1px solid var(--b-blue-bd)', borderRadius: 8, padding: '4px 10px', cursor: 'pointer' }}
+                          >
+                            📄 View {msg.citation.section || 'source policy'}{msg.citation.page ? ` · Page ${msg.citation.page}` : ''}
+                          </button>
+                        </div>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -310,21 +398,26 @@ export function AskAiFab() {
               </div>
             </div>
 
-            {/* Input */}
-            <div style={{ padding: '12px 14px', borderTop: '1px solid var(--divider)', display: 'flex', gap: 8, background: 'var(--surface)' }}>
-              <input
-                type="text"
-                placeholder="Ask something about company policy…"
-                value={userInp}
-                onChange={e => setUserInp(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter' && !loading && userInp.trim()) askQuestion(); }}
-                disabled={loading}
-                autoComplete="off"
-                style={{ flex: 1, height: 40, borderRadius: 10, border: '1.5px solid var(--border)', background: 'var(--surface-2)', color: 'var(--text)', padding: '0 14px', fontSize: 13, outline: 'none' }}
-              />
-              <button onClick={() => askQuestion()} disabled={loading || !userInp.trim()} aria-label="Send"
-                style={{ height: 40, width: 44, padding: 0, borderRadius: 10, background: 'linear-gradient(135deg, #2563eb 0%, #7c3aed 100%)', border: 'none', color: 'white', fontSize: 15, cursor: 'pointer', opacity: loading || !userInp.trim() ? 0.4 : 1 }}>➤</button>
-            </div>
+            {/* Input — hidden while browsing history (point 6): history is
+                read-only; asking a question means starting a new chat. */}
+            {!showHistory && (
+              <div style={{ padding: '12px 14px', borderTop: '1px solid var(--divider)', display: 'flex', gap: 8, background: 'var(--surface)' }}>
+                <input
+                  ref={inputRef}
+                  type="text"
+                  placeholder="Ask something about company policy…"
+                  value={userInp}
+                  onChange={e => setUserInp(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter' && !loading && userInp.trim()) askQuestion(); }}
+                  disabled={loading}
+                  autoFocus
+                  autoComplete="off"
+                  style={{ flex: 1, height: 40, borderRadius: 10, border: '1.5px solid var(--border)', background: 'var(--surface-2)', color: 'var(--text)', padding: '0 14px', fontSize: 13, outline: 'none' }}
+                />
+                <button onClick={() => askQuestion()} disabled={loading || !userInp.trim()} aria-label="Send"
+                  style={{ height: 40, width: 44, padding: 0, borderRadius: 10, background: 'linear-gradient(135deg, #2563eb 0%, #7c3aed 100%)', border: 'none', color: 'white', fontSize: 15, cursor: 'pointer', opacity: loading || !userInp.trim() ? 0.4 : 1 }}>➤</button>
+              </div>
+            )}
           </div>
         </div>
       )}

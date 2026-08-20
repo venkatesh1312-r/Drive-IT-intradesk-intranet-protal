@@ -107,10 +107,6 @@ function ProfileSection({ user, onUpdated }: { user: any; onUpdated?: (u: any) =
       const body = field === 'name' ? { name: draft } : { designation: draft };
       const updated = await api.updateProfile(body);
       setName(updated.name); setDesignation(updated.designation || '');
-      try {
-        const stored = JSON.parse(localStorage.getItem('user') || '{}');
-        localStorage.setItem('user', JSON.stringify({ ...stored, name: updated.name }));
-      } catch {}
       onUpdated?.(updated);
       setEditing(null);
       setMsg('✓ Saved');
@@ -173,27 +169,36 @@ function ProfileSection({ user, onUpdated }: { user: any; onUpdated?: (u: any) =
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16, padding: '16px 0' }}>
           <div>
             <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)' }}>Sign-in method</p>
-            <p style={{ fontSize: 12, color: 'var(--text-faint)', marginTop: 2 }}>A one-time code is emailed to you each time you sign in</p>
+            <p style={{ fontSize: 12, color: 'var(--text-faint)', marginTop: 2 }}>password based</p>
           </div>
-          <span style={{ fontSize: 13, color: 'var(--text-faint)', fontWeight: 500 }}>Email code (OTP)</span>
+          <span style={{ fontSize: 13, color: 'var(--text-faint)', fontWeight: 500 }}>Change password</span>
         </div>
       </div>
     </div>
   );
 }
 
-/* ── Notifications (client-side preferences) ── */
+/* ── Notifications (server-side preferences) ── */
 function NotificationsSection({ user }: { user: any }) {
-  const prefKey = `notif_prefs_${user?.email || 'me'}`;
   const defaults = { ticketUpdates: true, recognitions: true, weeklySummary: false };
   const [prefs, setPrefs] = useState(defaults);
 
   useEffect(() => {
-    try { const s = localStorage.getItem(prefKey); if (s) setPrefs({ ...defaults, ...JSON.parse(s) }); } catch {}
-  }, [prefKey]);
+    api.getPreferences()
+      .then(p => setPrefs({
+        ticketUpdates: p.notifTicketUpdates,
+        recognitions: p.notifRecognitions,
+        weeklySummary: p.notifWeeklySummary,
+      }))
+      .catch(() => {}); // keep defaults if it fails to load
+  }, []);
 
   function toggle(k: keyof typeof defaults) {
-    setPrefs(p => { const nextPrefs = { ...p, [k]: !p[k] }; localStorage.setItem(prefKey, JSON.stringify(nextPrefs)); return nextPrefs; });
+    setPrefs(p => {
+      const nextPrefs = { ...p, [k]: !p[k] };
+      api.updatePreferences({ [k]: nextPrefs[k] }).catch(() => {}); // best-effort; UI already reflects the change
+      return nextPrefs;
+    });
   }
 
   const items: { key: keyof typeof defaults; label: string; desc: string }[] = [
@@ -644,10 +649,7 @@ function PolicyUploadSection({ onUploaded }: { onUploaded?: () => void }) {
 
   return (
     <div>
-      <h2 style={{ fontSize: 18, fontWeight: 700, color: 'var(--text)' }}>Add Documents</h2>
-      <p style={{ fontSize: 13, color: 'var(--text-muted)', marginTop: 3, marginBottom: 18 }}>
-        Upload company policy PDFs so the AI assistant can reference them when answering questions.
-      </p>
+      
 
       <div style={{ ...card, padding: 20 }}>
         {status === 'uploading' && (

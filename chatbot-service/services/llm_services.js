@@ -34,7 +34,20 @@ const GREETINGS = [
 const THANKS = ['thank you','thanks','ty','thx','thank u','thanks a lot','thank you so much']
 const BYES   = ['bye','goodbye','see you','cya']
 
-export const askLLM = async (context, question, history = [], res, appendNote = "") => {
+// Marker used to smuggle a machine-generated citation (page-accurate,
+// built from the actual retrieved chunk — never invented by the model)
+// to the end of the plain-text stream. The frontend splits on this and
+// renders it as a clickable "View Section X (page N)" link, then strips
+// it from the displayed text.
+// NOTE: deliberately NOT a NUL byte (\u0000) — Postgres text columns
+// silently strip NUL bytes on insert, which broke the marker for any
+// message that got saved to DB and reloaded (it would show up as the
+// literal word "CITATION {...}" in the chat instead of a button). Zero-
+// width spaces round-trip through Postgres/JSON fine and are invisible
+// even in the unlikely case they leak into view.
+export const CITATION_MARKER = '\u200b\u200bCITATION\u200b\u200b'
+
+export const askLLM = async (context, question, history = [], res, appendNote = "", citation = null) => {
 
   const t0 = Date.now()
   timerLog('\n─────────────────────────────────────')
@@ -52,14 +65,20 @@ export const askLLM = async (context, question, history = [], res, appendNote = 
 
   if (greetingPool) {
     const reply = greetingPool[Math.floor(Math.random() * greetingPool.length)]
-    res.setHeader('Content-Type', 'text/plain')
-    res.setHeader('Transfer-Encoding', 'chunked')
-    res.flushHeaders()
-    for (const word of reply.split(' ')) {
-      res.write(word + ' ')
-      await new Promise(r => setTimeout(r, 30))
+    try {
+      res.setHeader('Content-Type', 'text/plain')
+      res.setHeader('Transfer-Encoding', 'chunked')
+      res.flushHeaders()
+      for (const word of reply.split(' ')) {
+        res.write(word + ' ')
+        await new Promise(r => setTimeout(r, 30))
+      }
+      res.end()
+    } catch (err) {
+      // Client disconnected mid-stream — harmless, we still return the
+      // full reply below so the caller can save it to history/DB.
+      console.warn('[Stream write skipped, client likely disconnected]', err.message)
     }
-    res.end()
     timerLog(`[TIMER] Greeting fast-path: ${Date.now() - t0}ms`)
     return reply
   }
@@ -84,20 +103,33 @@ export const askLLM = async (context, question, history = [], res, appendNote = 
   }
 
   // ── Step 3: Streaming headers ─────────────────────────────────────────────
-  res.setHeader('Content-Type', 'text/plain')
-  res.setHeader('Transfer-Encoding', 'chunked')
-  res.flushHeaders()
+  // Guarded: if the client already disconnected (e.g. tab closed/refreshed
+  // right after sending), setting headers can throw. We still want the
+  // Groq generation + DB save below to complete, so we swallow this.
+  let clientConnected = true
+  try {
+    res.setHeader('Content-Type', 'text/plain')
+    res.setHeader('Transfer-Encoding', 'chunked')
+    res.flushHeaders()
+  } catch (err) {
+    clientConnected = false
+    console.warn('[Stream headers skipped, client likely disconnected]', err.message)
+  }
 
   // ── Step 4: System prompt ─────────────────────────────────────────────────
+  // NOTE: the model is deliberately NOT asked to invent a "(Section X)"
+  // citation anymore — it used to make one up even when unsure, which is
+  // exactly the wrong behaviour for a policy bot. The real citation (tied
+  // to an actual retrieved chunk's page number) is now attached
+  // server-side in chat_controller.js after generation, and only when the
+  // answer isn't the "not available" fallback.
   const systemPrompt = context
     ? `You are a company policy assistant.
 Always interpret user queries even if they contain spelling mistakes, numbers, or casual phrasing.
 Use ONLY the context below to answer. Do not use any outside knowledge.
-If the answer is not found in the context, say: "This information is not available in the company policy. For further assistance, please contact HR at hr@company.com"
+If the answer is not found in the context, say exactly: "This information is not available in the company policy. For further assistance, please contact HR at hr@company.com"
 Be concise — max 4 lines.
-At the END of your response add the policy reference like: (Section X. Title)
-Example: "Employees must maintain formal attire. (Section 5. Dress Code)"
-Never start with a citation. Never cite as a numbered list.
+Do NOT add a section/policy citation yourself — that is handled separately. Just answer the question plainly.
 
 CONTEXT:
 ${context}`
@@ -136,15 +168,41 @@ Keep your reply short — max 2 lines. Do not mention company policy documents.`
       firstChunk = false
     }
     fullResponse += content
-    res.write(content)
+    // Keep consuming the Groq stream (to build fullResponse for saving)
+    // even if the client has gone away — a dead socket must never abort
+    // this loop or the caller's history.push()/DB save would be skipped
+    // and the whole exchange would be lost on refresh.
+    if (clientConnected) {
+      try {
+        res.write(content)
+      } catch (err) {
+        clientConnected = false
+      }
+    }
   }
 
   // Append HR note if needed (3rd consecutive same topic)
-  if (appendNote) res.write(appendNote)
+  if (appendNote && clientConnected) {
+    try { res.write(appendNote) } catch (err) { clientConnected = false }
+  }
+
+  // Only attach the real citation if the model actually answered from
+  // policy — never when it fell back to "not available", so that message
+  // never carries a (fake or dangling) section reference.
+  // Deliberately NOT folded into fullResponse here — the caller
+  // (chat_controller.js) rebuilds the identical suffix when saving to
+  // history, appended AFTER noteToAppend, so ordering in the DB always
+  // matches what was actually streamed to the client.
+  const isNotAvailable = fullResponse.includes('This information is not available in the company policy')
+  if (citation && !isNotAvailable && clientConnected) {
+    try { res.write(CITATION_MARKER + JSON.stringify(citation)) } catch (err) { clientConnected = false }
+  }
 
   timerLog(`[TIMER] Stream done: ${Date.now() - t3}ms`)
   timerLog(`[TIMER] TOTAL: ${Date.now() - t0}ms`)
-  res.end()
+  if (clientConnected) {
+    try { res.end() } catch (err) { /* already gone, nothing to do */ }
+  }
 
   // ── Step 7: Output guard in background (unchanged) ───────────────────────
   setImmediate(async () => {

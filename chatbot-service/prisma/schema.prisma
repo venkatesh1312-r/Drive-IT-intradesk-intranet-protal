@@ -33,6 +33,11 @@ model ChunkedPolicyDoc {
   pd_id       Int?
   chunk_index Int?
   chunk_text  String?
+  // Which page of the source PDF this chunk came from (1-indexed).
+  // Lets the bot cite a real, clickable page instead of a
+  // model-hallucinated section reference. Null for legacy rows
+  // chunked before this column existed.
+  page_number Int?
   // pgvector column — 768 dims (nomic-embed-text). Managed via raw SQL
   // in the migration since Prisma can't natively type "vector".
   embedding   Unsupported("vector")?
@@ -40,6 +45,22 @@ model ChunkedPolicyDoc {
 
   @@index([embedding], map: "chunked_policy_embedding_idx")
   @@map("CHUNKED_POLICY_DOC")
+}
+
+// Abbreviation -> full term map, auto-extracted from uploaded policy PDFs
+// (patterns like "Casual Leave (CL)") so the bot understands shortcuts
+// like "CL"/"EL" without anyone hardcoding a fixed list. Grows automatically
+// as new PDFs are uploaded; no redeploy needed.
+model PolicyAbbreviation {
+  id         Int       @id @default(autoincrement())
+  abbr       String    @db.VarChar(20)
+  full_term  String    @db.VarChar(200)
+  pd_id      Int?
+  created_at DateTime? @default(now()) @db.Timestamp(6)
+
+  @@unique([abbr, full_term])
+  @@index([abbr], map: "idx_policy_abbr_abbr")
+  @@map("POLICY_ABBREVIATION")
 }
 
 model ChatSession {

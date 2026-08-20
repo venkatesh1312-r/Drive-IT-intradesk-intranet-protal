@@ -569,7 +569,7 @@ function CalendarView({ user }: { user: any }) {
     try {
       const data = await api.getVisits({ status: statusFilter !== 'ALL' ? statusFilter : undefined, date: dateFilter || undefined });
       setVisits(data);
-    } catch {}
+    } catch (e: any) { alert(e.message || 'Failed to load visits. Please refresh.'); }
   }
   function closeDetail() { setSelected(null); setCheckinOpen(false); setCancelOpen(false); setVisitorIdNumber(''); setCheckinError(''); }
 
@@ -754,7 +754,7 @@ function AdminHistoryView({ user }: { user: any }) {
   useEffect(() => { load(); }, [statusFilter, dateFilter]);
 
   async function load() {
-    try { setVisits(await api.getVisits({ status: statusFilter !== 'ALL' ? statusFilter : undefined, date: dateFilter || undefined })); } catch {}
+    try { setVisits(await api.getVisits({ status: statusFilter !== 'ALL' ? statusFilter : undefined, date: dateFilter || undefined })); } catch (e: any) { alert(e.message || 'Failed to load visits. Please refresh.'); }
   }
   async function act(fn: () => Promise<any>) {
     setBusy(true);

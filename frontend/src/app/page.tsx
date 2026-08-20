@@ -60,6 +60,7 @@ const SIGNUP_OTP_TTL_S = 5 * 60; // must mirror backend SIGNUP_OTP_TTL_MINUTES
 
 export default function LoginPage() {
   const router = useRouter();
+  const [checkingSession, setCheckingSession] = useState(true);
   const [tab, setTab]           = useState<Tab>('signin');
   const [signUpStep, setSignUpStep] = useState<SignUpStep>('email');
   const [email, setEmail]       = useState('');
@@ -78,6 +79,20 @@ export default function LoginPage() {
   const [signupPassword, setSignupPassword]   = useState('');
   const [showSignupPassword, setShowSignupPassword] = useState(false);
   const [signupConfirm, setSignupConfirm]     = useState('');
+
+  /* Point 3/5: if already logged in (valid httpOnly cookie), skip the
+     login form entirely and land straight on the right dashboard — don't
+     make an already-authenticated person re-enter email/password just
+     because they hit "/". No localStorage/sessionStorage involved: the
+     cookie is sent automatically, and GET /me (which also returns role)
+     is how we find out whether it's still valid. If the cookie is
+     missing/expired/invalidated (e.g. logged in elsewhere), this 401s
+     and we just show the login form. */
+  useEffect(() => {
+    api.getMe()
+      .then((me) => router.replace(homeFor(me.role)))
+      .catch(() => setCheckingSession(false));
+  }, []);
 
   /* Resend cooldown ticker (60s) */
   useEffect(() => {
@@ -125,13 +140,9 @@ export default function LoginPage() {
         setError('Your account is not active yet. Please contact the administrator.');
         return;
       }
-      localStorage.setItem('token', res.access_token);
-      localStorage.setItem('user', JSON.stringify({
-        email: res.user.email,
-        name: res.user.name,
-        role: res.user.role,
-        points: res.user.points ?? 0,
-      }));
+      // Cookie is already set by the backend on this response — nothing
+      // to store client-side. res.user is only used here to pick the
+      // right landing page; each page re-fetches identity via /me itself.
       router.push(homeFor(res.user.role));
     } catch (err: any) {
       setError(err.message || 'Sign in failed. Please try again.');
@@ -247,6 +258,10 @@ export default function LoginPage() {
   };
   const focus = (e: React.FocusEvent<HTMLInputElement>) => { e.target.style.borderColor = '#2563eb'; e.target.style.background = '#ffffff'; };
   const blur  = (e: React.FocusEvent<HTMLInputElement>) => { e.target.style.borderColor = '#94a3b8'; e.target.style.background = '#f8fafc'; };
+
+  // Avoid a flash of the login form for an already-authenticated visitor
+  // while we verify their session and redirect them.
+  if (checkingSession) return null;
 
   return (
     <div style={{ display: 'flex', minHeight: '100vh' }}>

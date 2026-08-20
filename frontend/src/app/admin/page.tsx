@@ -1,7 +1,14 @@
 'use client';
-import React, { useState, useEffect } from 'react';
+// See dashboard/page.tsx for why: auth-gated, per-user, nothing to
+// statically prerender. force-dynamic does NOT exempt useActiveTab's
+// useSearchParams() from needing a real Suspense boundary at build time
+// (Next.js's static-export bailout check still fires regardless) — the
+// default export below wraps the page in <Suspense> for that reason.
+export const dynamic = 'force-dynamic';
+import React, { Suspense, useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
+import { useActiveTab } from '@/lib/useActiveTab';
 import { DriveITLogo, DriveITMark } from '@/components/DriveITLogo';
 import { NotificationBell } from '@/components/NotificationBell';
 import { Pagination } from '@/components/Pagination';
@@ -15,6 +22,7 @@ const PER_PAGE = 10;
 
 /* ── Nav items ───────────────────────────────────────────────────── */
 type Module = 'overview' | 'reward' | 'helpdesk' | 'worklog' | 'settings' | 'visitors' | 'visitor-admin' | 'users';
+const MODULE_KEYS: Module[] = ['overview', 'reward', 'helpdesk', 'worklog', 'settings', 'visitors', 'visitor-admin', 'users'];
 
 const VisitorIcon = () => <svg width={18} height={18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 11l-3 3-1.5-1.5"/></svg>;
 
@@ -70,7 +78,7 @@ function AdminRewardModule({ user }: { user: any }) {
     try {
       const [noms, s] = await Promise.all([api.getAllNominations(), api.getStats()]);
       setNominations(noms); setStats(s);
-    } catch {}
+    } catch (e: any) { alert(e.message || 'Failed to load nominations. Please refresh.'); }
   }
 
   async function handleApprove(id: number) {
@@ -85,7 +93,7 @@ function AdminRewardModule({ user }: { user: any }) {
   }
 
   async function handleDecline(id: number) {
-    try { await api.declineNomination(id); loadData(); } catch {}
+    try { await api.declineNomination(id); loadData(); } catch (e: any) { setMsgs(prev => ({ ...prev, [id]: e.message || 'Failed to decline.' })); }
   }
 
   async function handleEscalate(id: number) {
@@ -603,8 +611,10 @@ function AdminHelpdeskModule({ user }: { user: any }) {
     if (priorityFilter) params.priority = priorityFilter;
     // Fetch tickets and analytics INDEPENDENTLY — analytics is admin-only, so a 403
     // there must never prevent the ticket list from loading for HR.
-    try { setTickets(await api.getAllTickets(params)); } catch {}
+    try { setTickets(await api.getAllTickets(params)); } catch (e: any) { alert(e.message || 'Failed to load tickets. Please refresh.'); }
     if (!isHR) {
+      // Analytics is admin-only — a 403 here is expected for HR/non-admins and must
+      // never surface as an error or block the ticket list above from loading.
       try { setAnalytics(await api.getTicketAnalytics()); } catch {}
     }
   }
@@ -618,7 +628,7 @@ function AdminHelpdeskModule({ user }: { user: any }) {
       setShowBlockForm(false);
       setResolveNote('');
       setBlockReason('');
-    } catch {}
+    } catch (e: any) { alert(e.message || 'Failed to load ticket.'); }
   }
 
   async function ticketAction(body: object) {
@@ -638,7 +648,7 @@ function AdminHelpdeskModule({ user }: { user: any }) {
       setShowBlockForm(false);
       setResolveNote('');
       setBlockReason('');
-    } catch {}
+    } catch (e: any) { alert(e.message || 'Action failed. Please try again.'); }
     finally { setActionLoading(false); }
   }
 
@@ -650,7 +660,7 @@ function AdminHelpdeskModule({ user }: { user: any }) {
       const newComment = await api.createComment(selectedTicket.id, { message: comment });
       setComments(prev => [...prev, newComment]);
       setComment('');
-    } catch {}
+    } catch (e: any) { alert(e.message || 'Failed to post comment.'); }
     finally { setCommentLoading(false); }
   }
 
@@ -1012,23 +1022,34 @@ function AdminHelpdeskModule({ user }: { user: any }) {
 }
 
 /* ── Page ────────────────────────────────────────────────────────── */
-export default function AdminPage() {
+function AdminPageInner() {
   const router = useRouter();
   const [user, setUser] = useState<any>(null);
-  const [activeModule, setActiveModule] = useState<Module>('overview');
+  const [activeModule, setActiveModule] = useActiveTab<Module>('/admin', MODULE_KEYS, 'overview'); // point 2: persists across refresh via URL
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [hoveredItem, setHoveredItem] = useState<Module | null>(null);
   const [showUserInfo, setShowUserInfo] = useState(false);
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
+  const profileRef = useRef<HTMLDivElement>(null);
 
-  // Theme is per-user and stored locally — toggling here never affects other users or the employee dashboard
+  // Point 6: close the profile dropdown on any click outside it.
   useEffect(() => {
-    try { const e = JSON.parse(localStorage.getItem('user') || '{}')?.email; if (localStorage.getItem('theme_' + e) === 'dark') setTheme('dark'); } catch {}
-  }, []);
+    if (!showUserInfo) return;
+    function onClickOutside(e: MouseEvent) {
+      if (profileRef.current && !profileRef.current.contains(e.target as Node)) {
+        setShowUserInfo(false);
+      }
+    }
+    document.addEventListener('mousedown', onClickOutside);
+    return () => document.removeEventListener('mousedown', onClickOutside);
+  }, [showUserInfo]);
+
+  // Theme is per-user, persisted server-side — no localStorage, follows
+  // the person to any machine they log in from.
   function toggleTheme() {
     setTheme(prev => {
       const next = prev === 'dark' ? 'light' : 'dark';
-      try { const e = JSON.parse(localStorage.getItem('user') || '{}')?.email; localStorage.setItem('theme_' + e, next); } catch {}
+      api.updatePreferences({ theme: next }).catch(() => {});
       return next;
     });
   }
@@ -1040,21 +1061,17 @@ export default function AdminPage() {
     return () => { document.documentElement.removeAttribute('data-theme'); };
   }, [theme]);
 
+  // Identity + role always comes fresh from the cookie-authenticated /me
+  // call — nothing cached client-side.
   useEffect(() => {
-    const stored = localStorage.getItem('user');
-    if (!stored) { router.push('/'); return; }
-    const u = JSON.parse(stored);
-    if (u.role !== 'ADMIN' && u.role !== 'HR') { router.push('/dashboard'); return; }
     api.getMe().then(me => {
-      setUser({ ...u, id: me.id, name: me.name, points: me.points });
-    }).catch(() => {
-      // 401 is already handled in api.ts (clears storage + redirects).
-      // For network errors (backend down), keep the stored session.
-      setUser(u);
-    });
+      if (me.role !== 'ADMIN' && me.role !== 'HR') { router.push('/dashboard'); return; }
+      setUser(me);
+      if (me.theme === 'dark') setTheme('dark');
+    }).catch(() => router.push('/'));
   }, []);
 
-  function logout() { localStorage.clear(); router.push('/'); }
+  function logout() { api.logout().finally(() => router.push('/')); }
 
   const SIDEBAR_W = sidebarOpen ? 240 : 64;
 
@@ -1142,9 +1159,18 @@ export default function AdminPage() {
         </nav>
 
         {/* User + logout */}
-        <div style={{ borderTop: '1px solid #0e2744', padding: sidebarOpen ? '14px 16px' : '14px 13px', position: 'relative' }}>
-          {showUserInfo && sidebarOpen && (
-            <div style={{ position: 'absolute', bottom: '100%', left: 12, right: 12, background: '#0d1f3c', border: '1px solid #1e3a5f', borderRadius: 12, padding: 16, marginBottom: 8, boxShadow: '0 -8px 32px rgba(0,0,0,0.5)', zIndex: 20 }}>
+        <div ref={profileRef} style={{ borderTop: '1px solid #0e2744', padding: sidebarOpen ? '14px 16px' : '14px 13px', position: 'relative' }}>
+          {showUserInfo && (
+            <div style={{
+              position: 'absolute', bottom: '100%', marginBottom: 8,
+              // Point 7: previously gated to sidebarOpen only, making the
+              // dropdown unreachable when collapsed. Anchor + size it
+              // differently in that state instead of hiding it.
+              left: sidebarOpen ? 12 : 8,
+              right: sidebarOpen ? 12 : 'auto',
+              width: sidebarOpen ? 'auto' : 240,
+              background: '#0d1f3c', border: '1px solid #1e3a5f', borderRadius: 12, padding: 16, boxShadow: '0 -8px 32px rgba(0,0,0,0.5)', zIndex: 20,
+            }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
                 <div style={{ width: 46, height: 46, borderRadius: '50%', background: 'rgba(245,158,11,0.15)', border: '2px solid #f59e0b', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
                   <span style={{ fontSize: 17, fontWeight: 700, color: '#f59e0b' }}>{user?.name?.charAt(0).toUpperCase()}</span>
@@ -1218,5 +1244,13 @@ export default function AdminPage() {
 
       <AskAiFab />
     </div>
+  );
+}
+
+export default function AdminPage() {
+  return (
+    <Suspense fallback={null}>
+      <AdminPageInner />
+    </Suspense>
   );
 }

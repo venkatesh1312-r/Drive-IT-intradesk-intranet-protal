@@ -97,6 +97,20 @@ model User {
   otpVerified     Boolean             @default(false)
   // ── Password login ──
   passwordHash        String?
+  // Single-active-session enforcement: a fresh UUID is generated and
+  // stored here on every successful login (OTP or password). It's also
+  // embedded in the JWT as `sid`. JwtStrategy rejects any token whose
+  // `sid` doesn't match this column, so logging in on a second device
+  // silently invalidates the first device's token on its next request.
+  currentSessionId     String?
+
+  // ── Preferences (server-side, not localStorage) ──
+  // Follows the person to any machine they log in from, instead of being
+  // stuck per-browser like the old theme_<email> localStorage key was.
+  theme                String   @default("light") // "light" | "dark"
+  notifTicketUpdates   Boolean  @default(true)
+  notifRecognitions    Boolean  @default(true)
+  notifWeeklySummary   Boolean  @default(false)
   // Reused for both first-time "set password" (signup activation) links and
   // "forgot password" links — same mechanism, same token lifecycle.
   passwordTokenHash    String?

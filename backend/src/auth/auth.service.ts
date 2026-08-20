@@ -20,7 +20,7 @@ import {
 } from './auth.dto';
 import { MailerService } from './mailer.service';
 import * as bcrypt from 'bcrypt';
-import { randomInt, randomBytes } from 'crypto';
+import { randomInt, randomBytes, randomUUID } from 'crypto';
 
 // ── OTP policy ──────────────────────────────────────────────────────
 const OTP_TTL_MINUTES = 5;
@@ -143,9 +143,35 @@ export class AuthService {
       return { pending: true, status: user.status, user: { email: user.email, name: user.name } };
     }
 
-    const token = this.jwt.sign({ sub: user.id, email: user.email, role: user.role });
+    const token = await this.issueSession(user);
     const { otpHash, otpExpiresAt, otpAttempts, lastOtpSentAt, ...result } = user;
     return { access_token: token, user: result };
+  }
+
+  // Invalidates the session server-side on logout (belt-and-braces on top
+  // of clearing the cookie) — a copied/leaked cookie stops working
+  // immediately rather than lingering until its 24h expiry. Rotated to a
+  // fresh random value rather than null: JwtStrategy's mismatch check
+  // only fires when currentSessionId is truthy, so null would actually
+  // let an old token slip back in unchecked.
+  async logout(userId: number) {
+    await this.prisma.user.update({ where: { id: userId }, data: { currentSessionId: randomUUID() } });
+    return { success: true };
+  }
+
+  // ─── Session: issue a fresh token + invalidate any other device ─────
+  // Called on every successful login (OTP or password). Storing a new
+  // sessionId here — and rejecting any JWT whose `sid` doesn't match it
+  // in JwtStrategy — means logging in on a second device silently signs
+  // the first one out the next time it makes a request. Token is valid
+  // for 24h regardless of the global JWT_EXPIRES_IN default.
+  private async issueSession(user: { id: number; email: string; role: any }) {
+    const sid = randomUUID();
+    await this.prisma.user.update({ where: { id: user.id }, data: { currentSessionId: sid } });
+    return this.jwt.sign(
+      { sub: user.id, email: user.email, role: user.role, sid },
+      { expiresIn: '24h' },
+    );
   }
 
   // ─── Password auth: shared helper to issue + email a link ─────────
@@ -392,7 +418,7 @@ export class AuthService {
       return { pending: true, status: user.status, user: { email: user.email, name: user.name } };
     }
 
-    const token = this.jwt.sign({ sub: user.id, email: user.email, role: user.role });
+    const token = await this.issueSession(user);
     const { otpHash, otpExpiresAt, otpAttempts, lastOtpSentAt, passwordHash, passwordTokenHash, passwordTokenExpires, ...result } = user;
     return { access_token: token, user: result };
   }

@@ -44,8 +44,10 @@ export function NotificationBell({ accent = '#2563eb' }: { accent?: string }) {
   }
 
   async function clearAll() {
-    try { await api.clearNotifications(); } catch {}
-    setItems([]); setUnread(0);
+    try {
+      await api.clearNotifications();
+      setItems([]); setUnread(0);
+    } catch (e: any) { alert(e.message || 'Failed to clear notifications.'); }
   }
 
   function timeAgo(iso: string) {

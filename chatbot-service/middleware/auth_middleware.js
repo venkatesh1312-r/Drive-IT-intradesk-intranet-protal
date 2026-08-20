@@ -1,16 +1,19 @@
 import jwt from 'jsonwebtoken'
 
-// Verifies the DriveIT login JWT. Accepts the token either as a
-// `Authorization: Bearer <token>` header (what the Next.js frontend sends)
-// or as a `token` cookie. Uses the SAME JWT_SECRET as the NestJS backend.
+// Verifies the DriveIT login JWT from the httpOnly `token` cookie (set by
+// the NestJS backend on login). The frontend never reads or stores this
+// token itself — the browser attaches the cookie automatically on
+// credentialed requests. Uses the SAME JWT_SECRET as the NestJS backend.
 //
-// The NestJS payload is { sub, email, role } — we expose `sub` as req.user.id
-// so the existing chat controller (which scopes sessions by emp_id) works
-// unchanged.
+// The NestJS payload is { sub, email, role, sid } — we expose `sub` as
+// req.user.id so the existing chat controller (which scopes sessions by
+// emp_id) works unchanged. `sid` isn't re-checked against the DB here
+// (that single-active-session enforcement lives in the NestJS backend);
+// worst case a just-logged-out-elsewhere token stays valid for the chat
+// widget until its 24h expiry, which is an acceptable tradeoff for this
+// sidecar service.
 const isAuthenticated = (req, res, next) => {
-  const header = req.headers.authorization || ''
-  const bearer = header.startsWith('Bearer ') ? header.slice(7) : null
-  const token = bearer || req.cookies?.token
+  const token = req.cookies?.token
 
   if (!token) {
     return res.status(401).json({ success: false, message: 'Access Denied: Please log in.' })
